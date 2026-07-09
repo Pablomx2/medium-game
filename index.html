@@ -308,12 +308,19 @@ const T = {
     roomNotFound: "Room “{code}” not found. Check the code.",
     connectionError: "Connection error: {type}",
     gameAlreadyStarted: "Game already started",
+    roomFull: "This room is full (20 players max).",
     lostConnection: "Lost connection to host.",
     backBtn: "Back",
     roomCodeLabel: "Room code — share with everyone",
     roomCodeHint: "They open this same website and tap Join",
+    copyLinkBtn: "Copy invite link",
+    linkCopied: "Copied!",
+    copyLinkManual: "Copy this link:",
+    joiningRoomLabel: "Joining room",
+    joinRoomBtn: "Join room {code}",
+    hostInsteadLink: "Not your code? Host a new game",
     waitingHostStart: "Waiting for the host to start…",
-    playersLabel: "Players ({n})",
+    playersLabel: "Players ({n}/{max})",
     gameModeLabel: "Game mode",
     modeTypeBtn: "⌨️ Type it",
     modeLocalBtn: "🗣️ Say it aloud",
@@ -356,7 +363,8 @@ const T = {
     endGameBtn: "End game now",
     relaxNextRound: "Relax — you're back in next round.",
     finalScoresTitle: "🏆 Final Scores",
-    newGameBtn: "New game",
+    backToLobbyBtn: "Back to lobby",
+    restartGameBtn: "🔁 Restart game",
     thanksPlaying: "Thanks for playing! Host can start a new game.",
     playerCol: "Player",
     pointsCol: "Points",
@@ -384,12 +392,19 @@ const T = {
     roomNotFound: "Sala “{code}” no encontrada. Verifica el código.",
     connectionError: "Error de conexión: {type}",
     gameAlreadyStarted: "La partida ya comenzó",
+    roomFull: "Esta sala está llena (máximo 20 jugadores).",
     lostConnection: "Se perdió la conexión con el anfitrión.",
     backBtn: "Atrás",
     roomCodeLabel: "Código de la sala — compártelo con todos",
     roomCodeHint: "Ellos abren este mismo sitio y tocan Unirse",
+    copyLinkBtn: "Copiar enlace de invitación",
+    linkCopied: "¡Copiado!",
+    copyLinkManual: "Copia este enlace:",
+    joiningRoomLabel: "Uniéndote a la sala",
+    joinRoomBtn: "Unirse a la sala {code}",
+    hostInsteadLink: "¿No es tu código? Crea una partida nueva",
     waitingHostStart: "Esperando a que el anfitrión inicie…",
-    playersLabel: "Jugadores ({n})",
+    playersLabel: "Jugadores ({n}/{max})",
     gameModeLabel: "Modo de juego",
     modeTypeBtn: "⌨️ Escribirla",
     modeLocalBtn: "🗣️ Decirla en voz alta",
@@ -432,7 +447,8 @@ const T = {
     endGameBtn: "Terminar partida ahora",
     relaxNextRound: "Descansa — vuelves en la siguiente ronda.",
     finalScoresTitle: "🏆 Puntuación final",
-    newGameBtn: "Nueva partida",
+    backToLobbyBtn: "Volver al lobby",
+    restartGameBtn: "🔁 Reiniciar partida",
     thanksPlaying: "¡Gracias por jugar! El anfitrión puede iniciar una nueva partida.",
     playerCol: "Jugador",
     pointsCol: "Puntos",
@@ -458,6 +474,7 @@ const rollPoints = attempt => {
 };
 const MAX_ATTEMPTS = 3;
 const HAND_SIZE = 3;
+const MAX_PLAYERS = 20;
 const PEER_PREFIX = "medium-mindmeld-";
 
 const $app = document.getElementById("app");
@@ -471,6 +488,8 @@ let myView = null;        // last view received / computed
 let myName = "";
 let uiLang = localStorage.getItem("medium-lang") || "en"; // personal language pref, used before joining a room
 function curLang() { return (myView && myView.lang) || uiLang; }
+let inviteCode = new URLSearchParams(location.search).get("code");
+inviteCode = inviteCode ? inviteCode.toUpperCase().replace(/[^A-Z]/g, "").slice(0, 4) : "";
 
 /* ---------------- HOST STATE ---------------- */
 const H = {
@@ -696,6 +715,7 @@ function setupHost(name) {
           if (existing) { existing.conn = conn; existing.id = conn.peer; existing.connected = true; broadcast(); return; }
           conn.send({ t: "reject", reason: "started" }); return;
         }
+        if (H.players.length >= MAX_PLAYERS) { conn.send({ t: "reject", reason: "full" }); return; }
         let nm = msg.name.trim().slice(0, 16) || "Player";
         while (H.players.some(p => p.name === nm)) nm += "'";
         H.players.push({ id: conn.peer, name: nm, conn, score: 0, hand: [], connected: true });
@@ -731,7 +751,7 @@ function setupGuest(name, code) {
     hostConn.on("data", msg => {
       if (msg.t === "view") { myView = msg.view; render(); }
       else if (msg.t === "welcome") { myName = msg.name; }
-      else if (msg.t === "reject") { renderError(t(uiLang, "gameAlreadyStarted")); }
+      else if (msg.t === "reject") { renderError(t(uiLang, msg.reason === "full" ? "roomFull" : "gameAlreadyStarted")); }
     });
     hostConn.on("close", () => renderError(t(curLang(), "lostConnection")));
   });
@@ -765,6 +785,7 @@ window.actLang = lang => {
 window.actStart = () => { if (role === "host") startGame(); };
 window.actNext = () => { if (role === "host") nextRound(); };
 window.actEnd = () => { if (role === "host") { H.stage = "end"; broadcast(); } };
+window.actBackToLobby = () => { if (role === "host") { H.stage = "lobby"; broadcast(); } };
 
 /* ---------------- RENDERING ---------------- */
 function esc(s) { return String(s).replace(/[&<>"']/g, c => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;" }[c])); }
@@ -786,6 +807,22 @@ function langToggleCard(lang, selected, onclickName) {
 function renderHome() {
   const lang = uiLang;
   document.documentElement.lang = lang;
+  if (inviteCode) {
+    $app.innerHTML = `
+      ${header(lang)}
+      ${langToggleCard(lang, uiLang, "actLang")}
+      <div class="card stack">
+        <div class="label">${t(lang, "joiningRoomLabel")}</div>
+        <div class="big-code" style="font-size:2rem">${esc(inviteCode)}</div>
+        <input type="text" id="nameInput" maxlength="16" placeholder="${esc(t(lang, "namePlaceholder"))}" autocomplete="off"
+          onkeydown="if(event.key==='Enter')uiJoinInvite()">
+        <button onclick="uiJoinInvite()">${tf(lang, "joinRoomBtn", { code: inviteCode })}</button>
+      </div>
+      <button class="secondary" onclick="uiClearInvite()">${t(lang, "hostInsteadLink")}</button>`;
+    const savedInvite = localStorage.getItem("medium-name");
+    if (savedInvite) document.getElementById("nameInput").value = savedInvite;
+    return;
+  }
   $app.innerHTML = `
     ${header(lang)}
     ${langToggleCard(lang, uiLang, "actLang")}
@@ -809,6 +846,37 @@ window.uiHost = () => {
   if (!n) return alert(t(uiLang, "alertEnterName"));
   localStorage.setItem("medium-name", n);
   setupHost(n);
+};
+window.uiJoinInvite = () => {
+  const n = document.getElementById("nameInput").value.trim();
+  if (!n) return alert(t(uiLang, "alertEnterName"));
+  localStorage.setItem("medium-name", n);
+  setupGuest(n, inviteCode);
+};
+window.uiClearInvite = () => {
+  inviteCode = "";
+  history.replaceState(null, "", location.pathname);
+  renderHome();
+};
+window.uiShareInvite = async () => {
+  const link = `${location.origin}${location.pathname}?code=${H.code}`;
+  const lang = curLang();
+  if (navigator.share) {
+    try { await navigator.share({ title: "MEDIUM", url: link }); return; }
+    catch (e) { if (e && e.name === "AbortError") return; }
+  }
+  try {
+    await navigator.clipboard.writeText(link);
+  } catch (e) {
+    window.prompt(t(lang, "copyLinkManual"), link);
+    return;
+  }
+  const btn = document.getElementById("shareLinkBtn");
+  if (btn) {
+    const original = btn.textContent;
+    btn.textContent = t(lang, "linkCopied");
+    setTimeout(() => { const b = document.getElementById("shareLinkBtn"); if (b) b.textContent = original; }, 1500);
+  }
 };
 window.uiJoin = () => {
   const n = document.getElementById("nameInput").value.trim();
@@ -861,10 +929,12 @@ function renderLobby(v) {
         <div class="label">${t(lang, "roomCodeLabel")}</div>
         <div class="big-code">${esc(H.code)}</div>
         <div class="small">${t(lang, "roomCodeHint")}</div>
+        <button class="secondary" id="shareLinkBtn" onclick="uiShareInvite()">${t(lang, "copyLinkBtn")}</button>
+        <div class="small" style="word-break:break-all">${esc(location.origin + location.pathname)}?code=${esc(H.code)}</div>
       </div>` : `
       <div class="card center waiting-pulse">${t(lang, "waitingHostStart")}</div>`}
     <div class="card">
-      <div class="label">${tf(lang, "playersLabel", { n: v.players.length })}</div>
+      <div class="label">${tf(lang, "playersLabel", { n: v.players.length, max: MAX_PLAYERS })}</div>
       <div>${chips}</div>
     </div>
     ${v.isHost ? langToggleCard(lang, v.lang, "actLang") : `
@@ -1003,7 +1073,11 @@ function renderEnd(v) {
   $app.innerHTML = `
     ${header(lang)}
     <div class="card center"><div class="match-flash good">${t(lang, "finalScoresTitle")}</div>${scoreTable(v, true, lang)}</div>
-    ${v.isHost ? `<button onclick="location.reload()">${t(lang, "newGameBtn")}</button>`
+    ${v.isHost ? `
+      <div class="stack">
+        <button onclick="actBackToLobby()">${t(lang, "backToLobbyBtn")}</button>
+        <button class="secondary" onclick="actStart()">${t(lang, "restartGameBtn")}</button>
+      </div>`
                : `<div class="card center small">${t(lang, "thanksPlaying")}</div>`}`;
 }
 
