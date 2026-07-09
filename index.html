@@ -318,7 +318,7 @@ function nextRound() {
   const inRound = new Set(pairIds.flat());
   H.byeId = H.players.map(p => p.id).find(id => !inRound.has(id)) ?? null;
   H.pairs = pairIds.map(([a, b]) => ({
-    a, b, phase: "pick", picks: {}, guesses: {}, attempt: 1, history: [], points: 0,
+    a, b, phase: "pick", picks: {}, guesses: {}, attempt: 1, history: [], pointsBy: null,
   }));
   broadcast();
 }
@@ -357,11 +357,10 @@ function handleGuess(id, word) {
     pair.history.push({ a: ga, b: gb, match });
     pair.guesses = {};
     if (match) {
-      pair.points = rollPoints(pair.attempt);
+      pair.pointsBy = { [pair.a]: rollPoints(pair.attempt), [pair.b]: rollPoints(pair.attempt) };
       pair.phase = "done";
-      [pair.a, pair.b].forEach(pid => hostPlayer(pid).score += pair.points);
+      [pair.a, pair.b].forEach(pid => hostPlayer(pid).score += pair.pointsBy[pid]);
     } else if (pair.attempt >= MAX_ATTEMPTS) {
-      pair.points = 0;
       pair.phase = "done";
     } else {
       pair.attempt++;
@@ -376,11 +375,10 @@ function handleResult(id, match) {
   if (H.mode !== "local" || !pair || pair.phase !== "guess") return;
   pair.history.push({ a: null, b: null, match });
   if (match) {
-    pair.points = rollPoints(pair.attempt);
+    pair.pointsBy = { [pair.a]: rollPoints(pair.attempt), [pair.b]: rollPoints(pair.attempt) };
     pair.phase = "done";
-    [pair.a, pair.b].forEach(pid => hostPlayer(pid).score += pair.points);
+    [pair.a, pair.b].forEach(pid => hostPlayer(pid).score += pair.pointsBy[pid]);
   } else if (pair.attempt >= MAX_ATTEMPTS) {
-    pair.points = 0;
     pair.phase = "done";
   } else {
     pair.attempt++;
@@ -412,7 +410,7 @@ function viewFor(id) {
   base.pairsStatus = H.pairs.map(p => ({
     names: [hostPlayer(p.a).name, hostPlayer(p.b).name],
     done: p.phase === "done",
-    points: p.points,
+    points: p.pointsBy ? [p.pointsBy[p.a], p.pointsBy[p.b]] : null,
   }));
   base.allDone = H.pairs.every(p => p.phase === "done");
 
@@ -437,7 +435,8 @@ function viewFor(id) {
     base.partnerWord = pair.picks[pid];
     base.guessed = pair.guesses[id] !== undefined;
     base.partnerGuessed = pair.guesses[pid] !== undefined;
-    base.points = pair.points;
+    base.points = pair.pointsBy ? pair.pointsBy[id] : 0;
+    base.partnerPoints = pair.pointsBy ? pair.pointsBy[pid] : 0;
   }
   return base;
 }
@@ -553,7 +552,7 @@ function renderHome() {
       </div>
     </div>
     <div class="card small">
-      <b>How to play:</b> each round you're paired with someone. You each pick one of your 3 secret words. Both words are revealed — now think of a word <i>in between</i> them and say it at the same time (type it on your phone, or say it out loud in local mode). Match on the 1st try: <b>7–9 pts</b> · 2nd: <b>4–6 pts</b> · 3rd: <b>1–3 pts</b> (exact value is a lucky roll). Both of you score!
+      <b>How to play:</b> each round you're paired with someone. You each pick one of your 3 secret words. Both words are revealed — now think of a word <i>in between</i> them and say it at the same time (type it on your phone, or say it out loud in local mode). Match on the 1st try: <b>7–9 pts</b> · 2nd: <b>4–6 pts</b> · 3rd: <b>1–3 pts</b> — you each roll your own points within the range. Both of you score!
     </div>`;
   const saved = localStorage.getItem("medium-name");
   if (saved) document.getElementById("nameInput").value = saved;
@@ -652,7 +651,7 @@ function pairsStatus(v) {
   if (!v.pairsStatus) return "";
   const rows = v.pairsStatus.map(p => `
     <div class="pr"><span>${esc(p.names[0])} + ${esc(p.names[1])}</span>
-    <span class="st ${p.done ? (p.points ? "done" : "fail") : ""}">${p.done ? (p.points ? "✓ " + p.points + " pts" : "✗ no match") : "playing…"}</span></div>`).join("");
+    <span class="st ${p.done ? (p.points ? "done" : "fail") : ""}">${p.done ? (p.points ? "✓ +" + p.points.join(" / +") + " pts" : "✗ no match") : "playing…"}</span></div>`).join("");
   return `<div class="card"><div class="label">This round</div><div class="pairs-list">${rows}</div></div>`;
 }
 
@@ -727,8 +726,9 @@ function renderRound(v) {
           </div>
           ${hist ? `<div class="stack">${hist}</div>` : ""}
           <div class="match-flash ${v.points ? "good" : "bad"}">
-            ${v.points ? "🤝 MIND MELD! +" + v.points + " pts each" : "😵 No match this time"}
+            ${v.points ? "🤝 MIND MELD! +" + v.points + " pts for you" : "😵 No match this time"}
           </div>
+          ${v.points ? `<div class="center small">${esc(v.partner)} rolled +${v.partnerPoints} pts</div>` : ""}
           <div class="status-banner">Waiting for other pairs / next round…</div>
         </div>`;
     }
