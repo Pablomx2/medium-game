@@ -229,7 +229,11 @@ const WORDS = [
 "Snowman","Igloo","Seal","Arctic","Frost","Glacier","Blizzard","Mitten","Sled","Skate"
 ].filter((w,i,a) => !/\d/.test(w) && a.indexOf(w) === i);
 
-const POINTS = { 1: 3, 2: 2, 3: 1 };   // 1st / 2nd / 3rd chance
+const POINT_RANGES = { 1: [7, 9], 2: [4, 6], 3: [1, 3] };   // 1st / 2nd / 3rd chance
+const rollPoints = attempt => {
+  const [lo, hi] = POINT_RANGES[attempt] || [1, 3];
+  return lo + Math.floor(Math.random() * (hi - lo + 1));
+};
 const MAX_ATTEMPTS = 3;
 const HAND_SIZE = 3;
 const PEER_PREFIX = "medium-mindmeld-";
@@ -353,7 +357,7 @@ function handleGuess(id, word) {
     pair.history.push({ a: ga, b: gb, match });
     pair.guesses = {};
     if (match) {
-      pair.points = POINTS[pair.attempt] || 1;
+      pair.points = rollPoints(pair.attempt);
       pair.phase = "done";
       [pair.a, pair.b].forEach(pid => hostPlayer(pid).score += pair.points);
     } else if (pair.attempt >= MAX_ATTEMPTS) {
@@ -372,7 +376,7 @@ function handleResult(id, match) {
   if (H.mode !== "local" || !pair || pair.phase !== "guess") return;
   pair.history.push({ a: null, b: null, match });
   if (match) {
-    pair.points = POINTS[pair.attempt] || 1;
+    pair.points = rollPoints(pair.attempt);
     pair.phase = "done";
     [pair.a, pair.b].forEach(pid => hostPlayer(pid).score += pair.points);
   } else if (pair.attempt >= MAX_ATTEMPTS) {
@@ -400,7 +404,7 @@ function viewFor(id) {
     players: H.players.map(p => ({ name: p.name, score: p.score, connected: p.connected, me: p.id === id })),
     round: H.roundIndex + 1,
     totalRounds: H.schedule.length,
-    scoring: POINTS,
+    scoring: POINT_RANGES,
     mode: H.mode,
   };
   if (H.stage !== "round" || !me) return base;
@@ -549,7 +553,7 @@ function renderHome() {
       </div>
     </div>
     <div class="card small">
-      <b>How to play:</b> each round you're paired with someone. You each pick one of your 3 secret words. Both words are revealed — now think of a word <i>in between</i> them and say it at the same time (type it on your phone, or say it out loud in local mode). Match on the 1st try: <b>3 pts</b> · 2nd: <b>2 pts</b> · 3rd: <b>1 pt</b>. Both of you score!
+      <b>How to play:</b> each round you're paired with someone. You each pick one of your 3 secret words. Both words are revealed — now think of a word <i>in between</i> them and say it at the same time (type it on your phone, or say it out loud in local mode). Match on the 1st try: <b>7–9 pts</b> · 2nd: <b>4–6 pts</b> · 3rd: <b>1–3 pts</b> (exact value is a lucky roll). Both of you score!
     </div>`;
   const saved = localStorage.getItem("medium-name");
   if (saved) document.getElementById("nameInput").value = saved;
@@ -687,7 +691,7 @@ function renderRound(v) {
             <span class="vs">↔</span>
             <div class="pair-word"><span class="who">${esc(v.partner)}'s word</span>${esc(v.partnerWord)}</div>
           </div>
-          <div class="center"><span class="attempt-pill">Chance ${v.attempt} of 3 — worth ${v.scoring[v.attempt]} pts</span></div>
+          <div class="center"><span class="attempt-pill">Chance ${v.attempt} of 3 — worth ${v.scoring[v.attempt][0]}–${v.scoring[v.attempt][1]} pts</span></div>
           ${hist ? `<div class="stack">${hist}</div>` : ""}
           <div class="label center">Count down together — 3, 2, 1 — and say your word out loud!</div>
           <div class="row">
@@ -704,7 +708,7 @@ function renderRound(v) {
             <span class="vs">↔</span>
             <div class="pair-word"><span class="who">${esc(v.partner)}'s word</span>${esc(v.partnerWord)}</div>
           </div>
-          <div class="center"><span class="attempt-pill">Chance ${v.attempt} of 3 — worth ${v.scoring[v.attempt]} pts</span></div>
+          <div class="center"><span class="attempt-pill">Chance ${v.attempt} of 3 — worth ${v.scoring[v.attempt][0]}–${v.scoring[v.attempt][1]} pts</span></div>
           ${hist ? `<div class="stack">${hist}</div>` : ""}
           ${v.guessed
             ? `<div class="status-banner waiting-pulse">Waiting for ${esc(v.partner)}…</div>`
