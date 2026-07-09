@@ -176,7 +176,7 @@
    Guests connect with a 4-letter room code.
    ============================================================ */
 
-const WORDS = [
+const WORDS_EN = [
 "Fire","Water","Ocean","Mountain","Dream","Night","Star","Moon","Sun","Rain",
 "Storm","Cloud","River","Forest","Desert","Island","Snow","Ice","Wind","Thunder",
 "Music","Dance","Song","Guitar","Piano","Drum","Voice","Silence","Echo","Rhythm",
@@ -227,7 +227,229 @@ const WORDS = [
 "Work","Office","Boss","Meeting","Salary","Career","Retire","Deadline","Email","Desk",
 "Melody","Concert","Festival","Ticket","Crowd","Applause","Encore","Backstage","Microphone","Speaker",
 "Snowman","Igloo","Seal","Arctic","Frost","Glacier","Blizzard","Mitten","Sled","Skate"
-].filter((w,i,a) => !/\d/.test(w) && a.indexOf(w) === i);
+];
+
+const WORDS_ES = [
+"Fuego","Agua","Océano","Montaña","Sueño","Noche","Estrella","Luna","Sol","Lluvia",
+"Tormenta","Nube","Río","Bosque","Desierto","Isla","Nieve","Hielo","Viento","Trueno",
+"Música","Baile","Canción","Guitarra","Piano","Tambor","Voz","Silencio","Eco","Ritmo",
+"Amor","Corazón","Beso","Boda","Familia","Amigo","Bebé","Madre","Padre","Hogar",
+"Casa","Puerta","Ventana","Llave","Pared","Techo","Jardín","Puente","Torre","Castillo",
+"Rey","Reina","Corona","Caballero","Dragón","Mago","Magia","Hechizo","Fantasma","Monstruo",
+"Zombi","Vampiro","Bruja","Ángel","Diablo","Cielo","Infierno","Alma","Espíritu","Hueso",
+"Doctor","Hospital","Medicina","Enfermera","Sangre","Cerebro","Ojo","Mano","Pie","Cabello",
+"Dinero","Oro","Plata","Diamante","Tesoro","Banco","Rico","Pobre","Moneda","Billetera",
+"Escuela","Maestro","Estudiante","Libro","Lápiz","Papel","Examen","Calificación","Biblioteca","Ciencia",
+"Tiempo","Reloj","Hora","Minuto","Calendario","Cumpleaños","Fiesta","Regalo","Globo","Pastel",
+"Café","Té","Leche","Azúcar","Sal","Pimienta","Pan","Mantequilla","Queso","Huevo",
+"Pizza","Hamburguesa","Taco","Pasta","Sopa","Ensalada","Arroz","Pollo","Pescado","Carne",
+"Manzana","Plátano","Naranja","Uva","Limón","Cereza","Durazno","Melón","Coco","Mango",
+"Perro","Gato","Pájaro","Caballo","Vaca","Cerdo","Oveja","León","Tigre","Oso",
+"Lobo","Zorro","Conejo","Ratón","Serpiente","Araña","Abeja","Hormiga","Mariposa","Tiburón",
+"Ballena","Delfín","Pulpo","Tortuga","Rana","Elefante","Mono","Jirafa","Cebra","Pingüino",
+"Carro","Camión","Autobús","Tren","Avión","Bote","Barco","Bicicleta","Motocicleta","Cohete",
+"Carretera","Calle","Ciudad","Pueblo","Aldea","País","Mapa","Viaje","Vacaciones","Hotel",
+"Playa","Ola","Arena","Concha","Surf","Palmera","Atardecer","Amanecer","Horizonte","Marea",
+"Invierno","Verano","Primavera","Otoño","Estación","Clima","Niebla","Arcoíris","Relámpago","Huracán",
+"Teléfono","Computadora","Internet","Robot","Cámara","Televisión","Radio","Batería","Pantalla","Botón",
+"Juego","Juguete","Pelota","Muñeca","Rompecabezas","Carta","Dado","Ajedrez","Carrera","Premio",
+"Fútbol","Baloncesto","Béisbol","Tenis","Golf","Boxeo","Natación","Correr","Gimnasio","Campeón",
+"Película","Actor","Teatro","Escenario","Reflector","Director","Comedia","Drama","Héroe","Villano",
+"Policía","Ladrón","Crimen","Prisión","Juez","Abogado","Pistola","Espada","Escudo","Guerra",
+"Paz","Bandera","Soldado","Ejército","Batalla","Victoria","Enemigo","Espía","Secreto","Misterio",
+"Miedo","Ira","Alegría","Tristeza","Esperanza","Fe","Confianza","Mentira","Verdad","Promesa",
+"Dormir","Cama","Almohada","Manta","Pesadilla","Alarma","Mañana","Desayuno","Almuerzo","Cena",
+"Cocina","Cuchillo","Tenedor","Cuchara","Plato","Taza","Vaso","Botella","Mesa","Silla",
+"Bombero","Chef","Piloto","Granjero","Artista","Cantante","Bailarín","Escritor","Pintor","Payaso",
+"Circo","Zoológico","Museo","Parque","Patio de juegos","Columpio","Tobogán","Fuente","Estatua","Banca",
+"Árbol","Flor","Rosa","Pasto","Hoja","Raíz","Semilla","Rama","Hongo","Cactus",
+"Selva","Cueva","Volcán","Terremoto","Cañón","Valle","Colina","Acantilado","Cascada","Lago",
+"Espacio","Planeta","Tierra","Marte","Galaxia","Extraterrestre","Astronauta","Cometa","Órbita","Gravedad",
+"Luz","Sombra","Oscuridad","Vela","Lámpara","Antorcha","Destello","Resplandor","Chispa","Llama",
+"Carta","Estampilla","Correo","Mensaje","Noticias","Periódico","Historia","Poema","Leyenda","Mito",
+"Iglesia","Templo","Oración","Campana","Coro","Santo","Milagro","Bendición","Ritual","Monje",
+"Pirata","Ancla","Vela","Brújula","Capitán","Tripulación","Cañón","Kraken","Loro","Ron",
+"Vaquero","Rancho","Lazo","Sheriff","Duelo","Cantina","Carreta","Herradura","Mina","Polvo",
+"Ninja","Samurái","Kárate","Maestro","Dojo","Honor","Cuchilla","Sigilo","Guerrero","Sensei",
+"Chocolate","Dulce","Galleta","Dona","Helado","Miel","Mermelada","Palomitas","Panqueque","Waffle",
+"Camisa","Pantalón","Zapatos","Sombrero","Vestido","Chaqueta","Calcetín","Guante","Bufanda","Cinturón",
+"Espejo","Peine","Jabón","Ducha","Toalla","Perfume","Maquillaje","Rastrillo","Cepillo","Lavabo",
+"Dolor","Dentista","Diente","Sonrisa","Risa","Llanto","Grito","Susurro","Alarido","Suspiro",
+"Suerte","Azar","Riesgo","Apuesta","Casino","Premio Mayor","Fortuna","Destino","Deseo","Maldición",
+"Foto","Memoria","Pasado","Futuro","Presente","Historia","Antiguo","Moderno","Tradición","Cambio",
+"Trabajo","Oficina","Jefe","Reunión","Salario","Carrera","Jubilarse","Plazo","Correo","Escritorio",
+"Melodía","Concierto","Festival","Boleto","Multitud","Aplauso","Bis","Bastidores","Micrófono","Altavoz",
+"Muñeco de nieve","Iglú","Foca","Ártico","Escarcha","Glaciar","Ventisca","Mitón","Trineo","Patín"
+];
+
+const dedup = arr => arr.filter((w, i, a) => !/\d/.test(w) && a.indexOf(w) === i);
+const WORDS = dedup(WORDS_EN);
+const WORDS_ES_LIST = dedup(WORDS_ES);
+const wordsFor = lang => (lang === "es" ? WORDS_ES_LIST : WORDS);
+
+/* ---------------- TRANSLATIONS ---------------- */
+const T = {
+  en: {
+    tagline: "Think of a word between the two words. Match minds, score points.",
+    languageLabel: "Language",
+    langEnBtn: "🇺🇸 English",
+    langEsBtn: "🇪🇸 Español",
+    yourNameLabel: "Your name",
+    namePlaceholder: "Name",
+    hostBtn: "Host a game",
+    codePlaceholder: "CODE",
+    joinBtn: "Join",
+    howToPlayBold: "How to play:",
+    howToPlayText: "each round you're paired with someone. You each pick one of your 3 secret words. Both words are revealed — now think of a word in between them and say it at the same time (type it on your phone, or say it out loud in local mode). Match on the 1st try: 7–9 pts · 2nd: 4–6 pts · 3rd: 1–3 pts — you each roll your own points within the range. Both of you score!",
+    alertEnterName: "Enter your name first",
+    alertEnterCode: "Enter the 4-letter room code",
+    creatingRoom: "Creating room…",
+    joiningRoom: "Joining room {code}…",
+    roomNotFound: "Room “{code}” not found. Check the code.",
+    connectionError: "Connection error: {type}",
+    gameAlreadyStarted: "Game already started",
+    lostConnection: "Lost connection to host.",
+    backBtn: "Back",
+    roomCodeLabel: "Room code — share with everyone",
+    roomCodeHint: "They open this same website and tap Join",
+    waitingHostStart: "Waiting for the host to start…",
+    playersLabel: "Players ({n})",
+    gameModeLabel: "Game mode",
+    modeTypeBtn: "⌨️ Type it",
+    modeLocalBtn: "🗣️ Say it aloud",
+    modeTypeDesc: "Each pair types their guesses on their phones — the app checks the match. Great for playing remotely.",
+    modeLocalDesc: "Each pair counts down and says their word out loud, then taps We matched / No match. Great for playing in the same room.",
+    modeDisplayPrefix: "Mode: ",
+    langDisplayPrefix: "Language: ",
+    needMorePlayers: "Need at least 2 players",
+    startGameBtn: "Start game",
+    roundLabel: "Round {r} of {t}",
+    youSitOut: "You sit out this round 😌",
+    youPlus: "You + {partner}",
+    pickWordLabel: "Pick one of your secret words",
+    stillPicking: "{partner} is still picking…",
+    alreadyPicked: "{partner} already picked!",
+    partnerPickingToo: "Your partner is picking too",
+    chanceLabel: "Chance {a} of 3 — worth {lo}–{hi} pts",
+    countdownLabel: "Count down together — 3, 2, 1 — and say your word out loud!",
+    weMatchedBtn: "🤝 We matched!",
+    noMatchBtn: "✗ No match",
+    eitherCanTap: "Either of you can tap the result",
+    yourWordLabel: "Your word",
+    partnerWordLabel: "{partner}'s word",
+    waitingForPartner: "Waiting for {partner}…",
+    typeInBetween: "Type the word in between — same time as {partner}!",
+    guessPlaceholder: "Your guess",
+    lockInBtn: "Lock in",
+    partnerReadySuffix: "— {partner} is ready!",
+    matchedFlash: "🤝 MIND MELD! +{points} pts for you",
+    partnerRolled: "{partner} rolled +{points} pts",
+    noMatchFlash: "😵 No match this time",
+    waitingNextRound: "Waiting for other pairs / next round…",
+    thisRoundLabel: "This round",
+    playingStatus: "playing…",
+    noMatchStatus: "✗ no match",
+    scoreboardLabel: "Scoreboard",
+    finishGameBtn: "Finish game",
+    nextRoundBtn: "Next round",
+    waitingForPairsSuffix: " (waiting for pairs)",
+    endGameBtn: "End game now",
+    relaxNextRound: "Relax — you're back in next round.",
+    finalScoresTitle: "🏆 Final Scores",
+    newGameBtn: "New game",
+    thanksPlaying: "Thanks for playing! Host can start a new game.",
+    playerCol: "Player",
+    pointsCol: "Points",
+    youSuffix: " (you)",
+    chanceHistLabel: "Chance {n}",
+    matchedHist: "Matched!",
+    noMatchHist: "No match",
+  },
+  es: {
+    tagline: "Piensa en una palabra entre las dos palabras. Conecten mentes, sumen puntos.",
+    languageLabel: "Idioma",
+    langEnBtn: "🇺🇸 English",
+    langEsBtn: "🇪🇸 Español",
+    yourNameLabel: "Tu nombre",
+    namePlaceholder: "Nombre",
+    hostBtn: "Crear una partida",
+    codePlaceholder: "CÓDIGO",
+    joinBtn: "Unirse",
+    howToPlayBold: "Cómo se juega:",
+    howToPlayText: "en cada ronda te emparejan con alguien. Cada quien elige una de sus 3 palabras secretas. Se revelan ambas palabras — ahora piensa en una palabra intermedia y dila al mismo tiempo (escríbela en tu teléfono, o dila en voz alta en modo local). Aciertan al 1er intento: 7–9 pts · 2do: 4–6 pts · 3er: 1–3 pts — cada quien tira sus propios puntos dentro del rango. ¡Los dos suman!",
+    alertEnterName: "Ingresa tu nombre primero",
+    alertEnterCode: "Ingresa el código de la sala de 4 letras",
+    creatingRoom: "Creando la sala…",
+    joiningRoom: "Uniéndote a la sala {code}…",
+    roomNotFound: "Sala “{code}” no encontrada. Verifica el código.",
+    connectionError: "Error de conexión: {type}",
+    gameAlreadyStarted: "La partida ya comenzó",
+    lostConnection: "Se perdió la conexión con el anfitrión.",
+    backBtn: "Atrás",
+    roomCodeLabel: "Código de la sala — compártelo con todos",
+    roomCodeHint: "Ellos abren este mismo sitio y tocan Unirse",
+    waitingHostStart: "Esperando a que el anfitrión inicie…",
+    playersLabel: "Jugadores ({n})",
+    gameModeLabel: "Modo de juego",
+    modeTypeBtn: "⌨️ Escribirla",
+    modeLocalBtn: "🗣️ Decirla en voz alta",
+    modeTypeDesc: "Cada pareja escribe su palabra en su teléfono — la app revisa si coinciden. Ideal para jugar a distancia.",
+    modeLocalDesc: "Cada pareja cuenta hacia atrás y dice su palabra en voz alta, luego toca Coincidimos / No coincidimos. Ideal para jugar en el mismo lugar.",
+    modeDisplayPrefix: "Modo: ",
+    langDisplayPrefix: "Idioma: ",
+    needMorePlayers: "Se necesitan al menos 2 jugadores",
+    startGameBtn: "Iniciar partida",
+    roundLabel: "Ronda {r} de {t}",
+    youSitOut: "Esta ronda descansas 😌",
+    youPlus: "Tú + {partner}",
+    pickWordLabel: "Elige una de tus palabras secretas",
+    stillPicking: "{partner} todavía está eligiendo…",
+    alreadyPicked: "¡{partner} ya eligió!",
+    partnerPickingToo: "Tu pareja también está eligiendo",
+    chanceLabel: "Oportunidad {a} de 3 — vale {lo}–{hi} pts",
+    countdownLabel: "Cuenten juntos — 3, 2, 1 — ¡y digan su palabra en voz alta!",
+    weMatchedBtn: "🤝 ¡Coincidimos!",
+    noMatchBtn: "✗ No coincidió",
+    eitherCanTap: "Cualquiera de los dos puede marcar el resultado",
+    yourWordLabel: "Tu palabra",
+    partnerWordLabel: "Palabra de {partner}",
+    waitingForPartner: "Esperando a {partner}…",
+    typeInBetween: "Escribe la palabra intermedia — ¡al mismo tiempo que {partner}!",
+    guessPlaceholder: "Tu palabra",
+    lockInBtn: "Confirmar",
+    partnerReadySuffix: "— ¡{partner} ya está listo!",
+    matchedFlash: "🤝 ¡CONEXIÓN MENTAL! +{points} pts para ti",
+    partnerRolled: "{partner} sacó +{points} pts",
+    noMatchFlash: "😵 Esta vez no coincidieron",
+    waitingNextRound: "Esperando a las demás parejas / siguiente ronda…",
+    thisRoundLabel: "Esta ronda",
+    playingStatus: "jugando…",
+    noMatchStatus: "✗ sin coincidencia",
+    scoreboardLabel: "Marcador",
+    finishGameBtn: "Terminar partida",
+    nextRoundBtn: "Siguiente ronda",
+    waitingForPairsSuffix: " (esperando parejas)",
+    endGameBtn: "Terminar partida ahora",
+    relaxNextRound: "Descansa — vuelves en la siguiente ronda.",
+    finalScoresTitle: "🏆 Puntuación final",
+    newGameBtn: "Nueva partida",
+    thanksPlaying: "¡Gracias por jugar! El anfitrión puede iniciar una nueva partida.",
+    playerCol: "Jugador",
+    pointsCol: "Puntos",
+    youSuffix: " (tú)",
+    chanceHistLabel: "Oportunidad {n}",
+    matchedHist: "¡Coincidieron!",
+    noMatchHist: "No coincidió",
+  },
+};
+function t(lang, key) {
+  return (T[lang] && T[lang][key]) ?? T.en[key] ?? key;
+}
+function tf(lang, key, params) {
+  let s = t(lang, key);
+  if (params) for (const k in params) s = s.split("{" + k + "}").join(params[k]);
+  return s;
+}
 
 const POINT_RANGES = { 1: [7, 9], 2: [4, 6], 3: [1, 3] };   // 1st / 2nd / 3rd chance
 const rollPoints = attempt => {
@@ -247,6 +469,8 @@ let myId = "me";          // host uses 'me'; guests use their peer connection id
 let hostConn = null;      // guest → host connection
 let myView = null;        // last view received / computed
 let myName = "";
+let uiLang = localStorage.getItem("medium-lang") || "en"; // personal language pref, used before joining a room
+function curLang() { return (myView && myView.lang) || uiLang; }
 
 /* ---------------- HOST STATE ---------------- */
 const H = {
@@ -254,9 +478,10 @@ const H = {
   deck: [], discard: [],
   stage: "lobby",         // lobby | round | end
   mode: "type",           // 'type' = type guesses on phones | 'local' = say aloud, tap yes/no
+  lang: "en",              // 'en' | 'es' — controls word deck + UI for the whole room
   schedule: [],           // rounds: [ [ [idxA, idxB], ... ], ... ]
   roundIndex: -1,
-  pairs: [],              // per current round: {a, b, phase, picks:{}, guesses:{}, attempt, history:[], points}
+  pairs: [],              // per current round: {a, b, phase, picks:{}, guesses:{}, attempt, history:[], pointsBy}
   byeId: null,
 };
 
@@ -270,7 +495,7 @@ function shuffle(arr) {
 }
 function drawWord() {
   if (!H.deck.length) { H.deck = shuffle(H.discard.splice(0)); }
-  if (!H.deck.length) { H.deck = shuffle([...WORDS]); } // full recycle fallback
+  if (!H.deck.length) { H.deck = shuffle([...wordsFor(H.lang)]); } // full recycle fallback
   return H.deck.pop();
 }
 function roomCode() {
@@ -302,7 +527,7 @@ function hostPlayer(id) { return H.players.find(p => p.id === id); }
 
 function startGame() {
   if (H.players.length < 2) return;
-  H.deck = shuffle([...WORDS]);
+  H.deck = shuffle([...wordsFor(H.lang)]);
   H.discard = [];
   H.players.forEach(p => { p.score = 0; p.hand = Array.from({length: HAND_SIZE}, drawWord); });
   H.schedule = buildSchedule(H.players.map(p => p.id));
@@ -404,6 +629,7 @@ function viewFor(id) {
     totalRounds: H.schedule.length,
     scoring: POINT_RANGES,
     mode: H.mode,
+    lang: H.lang,
   };
   if (H.stage !== "round" || !me) return base;
 
@@ -452,11 +678,12 @@ function broadcast() {
 function setupHost(name) {
   role = "host"; myName = name; myId = "me";
   const code = roomCode();
-  renderConnecting("Creating room…");
+  renderConnecting(t(uiLang, "creatingRoom"));
   peer = new Peer(PEER_PREFIX + code);
   peer.on("open", () => {
     H.players = [{ id: "me", name, conn: null, score: 0, hand: [], connected: true }];
     H.stage = "lobby";
+    H.lang = uiLang;
     H.code = code;
     broadcast();
   });
@@ -467,7 +694,7 @@ function setupHost(name) {
           // allow reconnect by name mid-game
           const existing = H.players.find(p => p.name === msg.name && !p.connected);
           if (existing) { existing.conn = conn; existing.id = conn.peer; existing.connected = true; broadcast(); return; }
-          conn.send({ t: "reject", reason: "Game already started" }); return;
+          conn.send({ t: "reject", reason: "started" }); return;
         }
         let nm = msg.name.trim().slice(0, 16) || "Player";
         while (H.players.some(p => p.name === nm)) nm += "'";
@@ -489,14 +716,14 @@ function setupHost(name) {
   });
   peer.on("error", err => {
     if (err.type === "unavailable-id") setupHost(name); // code collision → retry
-    else renderError("Connection error: " + err.type);
+    else renderError(tf(uiLang, "connectionError", { type: err.type }));
   });
 }
 
 /* ---------------- GUEST LOGIC ---------------- */
 function setupGuest(name, code) {
   role = "guest"; myName = name;
-  renderConnecting("Joining room " + code + "…");
+  renderConnecting(tf(uiLang, "joiningRoom", { code }));
   peer = new Peer();
   peer.on("open", () => {
     hostConn = peer.connect(PEER_PREFIX + code.toUpperCase(), { reliable: true });
@@ -504,13 +731,13 @@ function setupGuest(name, code) {
     hostConn.on("data", msg => {
       if (msg.t === "view") { myView = msg.view; render(); }
       else if (msg.t === "welcome") { myName = msg.name; }
-      else if (msg.t === "reject") { renderError(msg.reason); }
+      else if (msg.t === "reject") { renderError(t(uiLang, "gameAlreadyStarted")); }
     });
-    hostConn.on("close", () => renderError("Lost connection to host."));
+    hostConn.on("close", () => renderError(t(curLang(), "lostConnection")));
   });
   peer.on("error", err => {
-    if (err.type === "peer-unavailable") renderError("Room “" + code.toUpperCase() + "” not found. Check the code.");
-    else renderError("Connection error: " + err.type);
+    if (err.type === "peer-unavailable") renderError(tf(uiLang, "roomNotFound", { code: code.toUpperCase() }));
+    else renderError(tf(uiLang, "connectionError", { type: err.type }));
   });
 }
 
@@ -528,6 +755,13 @@ window.actGuess = () => {
 };
 window.actResult = m => send({ t: "result", match: m });
 window.actMode = m => { if (role === "host" && H.stage === "lobby") { H.mode = m; broadcast(); } };
+window.actLang = lang => {
+  if (role === "host" && H.stage === "lobby") {
+    H.lang = lang; uiLang = lang; localStorage.setItem("medium-lang", lang); broadcast();
+  } else if (!role) {
+    uiLang = lang; localStorage.setItem("medium-lang", lang); renderHome();
+  }
+};
 window.actStart = () => { if (role === "host") startGame(); };
 window.actNext = () => { if (role === "host") nextRound(); };
 window.actEnd = () => { if (role === "host") { H.stage = "end"; broadcast(); } };
@@ -535,147 +769,167 @@ window.actEnd = () => { if (role === "host") { H.stage = "end"; broadcast(); } }
 /* ---------------- RENDERING ---------------- */
 function esc(s) { return String(s).replace(/[&<>"']/g, c => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;" }[c])); }
 
-function header() {
-  return `<h1>MEDIUM</h1><div class="tagline">Think of a word between the two words. Match minds, score points.</div>`;
+function header(lang) {
+  return `<h1>MEDIUM</h1><div class="tagline">${t(lang, "tagline")}</div>`;
+}
+
+function langToggleCard(lang, selected, onclickName) {
+  return `<div class="card stack">
+    <div class="label">${t(lang, "languageLabel")}</div>
+    <div class="row">
+      <button class="word-btn ${selected === "en" ? "selected" : ""}" onclick="${onclickName}('en')">${t(lang, "langEnBtn")}</button>
+      <button class="word-btn ${selected === "es" ? "selected" : ""}" onclick="${onclickName}('es')">${t(lang, "langEsBtn")}</button>
+    </div>
+  </div>`;
 }
 
 function renderHome() {
+  const lang = uiLang;
+  document.documentElement.lang = lang;
   $app.innerHTML = `
-    ${header()}
+    ${header(lang)}
+    ${langToggleCard(lang, uiLang, "actLang")}
     <div class="card stack">
-      <div class="label">Your name</div>
-      <input type="text" id="nameInput" maxlength="16" placeholder="Name" autocomplete="off">
-      <button onclick="uiHost()">Host a game</button>
+      <div class="label">${t(lang, "yourNameLabel")}</div>
+      <input type="text" id="nameInput" maxlength="16" placeholder="${esc(t(lang, "namePlaceholder"))}" autocomplete="off">
+      <button onclick="uiHost()">${t(lang, "hostBtn")}</button>
       <div class="row">
-        <input type="text" id="codeInput" maxlength="4" placeholder="CODE" autocomplete="off" style="text-transform:uppercase; letter-spacing:.3em">
-        <button class="secondary" onclick="uiJoin()">Join</button>
+        <input type="text" id="codeInput" maxlength="4" placeholder="${esc(t(lang, "codePlaceholder"))}" autocomplete="off" style="text-transform:uppercase; letter-spacing:.3em">
+        <button class="secondary" onclick="uiJoin()">${t(lang, "joinBtn")}</button>
       </div>
     </div>
     <div class="card small">
-      <b>How to play:</b> each round you're paired with someone. You each pick one of your 3 secret words. Both words are revealed — now think of a word <i>in between</i> them and say it at the same time (type it on your phone, or say it out loud in local mode). Match on the 1st try: <b>7–9 pts</b> · 2nd: <b>4–6 pts</b> · 3rd: <b>1–3 pts</b> — you each roll your own points within the range. Both of you score!
+      <b>${t(lang, "howToPlayBold")}</b> ${t(lang, "howToPlayText")}
     </div>`;
   const saved = localStorage.getItem("medium-name");
   if (saved) document.getElementById("nameInput").value = saved;
 }
 window.uiHost = () => {
   const n = document.getElementById("nameInput").value.trim();
-  if (!n) return alert("Enter your name first");
+  if (!n) return alert(t(uiLang, "alertEnterName"));
   localStorage.setItem("medium-name", n);
   setupHost(n);
 };
 window.uiJoin = () => {
   const n = document.getElementById("nameInput").value.trim();
   const c = document.getElementById("codeInput").value.trim();
-  if (!n) return alert("Enter your name first");
-  if (c.length !== 4) return alert("Enter the 4-letter room code");
+  if (!n) return alert(t(uiLang, "alertEnterName"));
+  if (c.length !== 4) return alert(t(uiLang, "alertEnterCode"));
   localStorage.setItem("medium-name", n);
   setupGuest(n, c);
 };
 
 function renderConnecting(msg) {
-  $app.innerHTML = `${header()}<div class="card center waiting-pulse">${esc(msg)}</div>`;
+  const lang = curLang();
+  document.documentElement.lang = lang;
+  $app.innerHTML = `${header(lang)}<div class="card center waiting-pulse">${esc(msg)}</div>`;
 }
 function renderError(msg) {
-  $app.innerHTML = `${header()}
+  const lang = curLang();
+  document.documentElement.lang = lang;
+  $app.innerHTML = `${header(lang)}
     <div class="card center" style="border-color:var(--bad)">${esc(msg)}</div>
-    <button class="secondary" onclick="location.reload()">Back</button>`;
+    <button class="secondary" onclick="location.reload()">${t(lang, "backBtn")}</button>`;
 }
 
-function scoreTable(v, final) {
+function scoreTable(v, final, lang) {
   const rows = [...v.players].sort((a, b) => b.score - a.score).map((p, i) => `
     <tr class="${p.me ? "me" : ""}">
-      <td>${final && i === 0 ? "👑 " : ""}${esc(p.name)}${p.me ? " (you)" : ""}${p.connected === false ? " ⚠️" : ""}</td>
+      <td>${final && i === 0 ? "👑 " : ""}${esc(p.name)}${p.me ? t(lang, "youSuffix") : ""}${p.connected === false ? " ⚠️" : ""}</td>
       <td class="pts">${p.score}</td>
     </tr>`).join("");
-  return `<table class="score"><tr><th>Player</th><th style="text-align:right">Points</th></tr>${rows}</table>`;
+  return `<table class="score"><tr><th>${t(lang, "playerCol")}</th><th style="text-align:right">${t(lang, "pointsCol")}</th></tr>${rows}</table>`;
 }
 
 function render() {
   const v = myView;
   if (!v) return;
+  document.documentElement.lang = v.lang || uiLang;
   if (v.stage === "lobby") return renderLobby(v);
   if (v.stage === "round") return renderRound(v);
   if (v.stage === "end") return renderEnd(v);
 }
 
 function renderLobby(v) {
+  const lang = v.lang || uiLang;
   const chips = v.players.map(p =>
-    `<span class="player-chip"><span class="dot"></span>${esc(p.name)}${p.me ? " (you)" : ""}</span>`).join("");
+    `<span class="player-chip"><span class="dot"></span>${esc(p.name)}${p.me ? t(lang, "youSuffix") : ""}</span>`).join("");
   $app.innerHTML = `
-    ${header()}
+    ${header(lang)}
     ${v.isHost ? `
       <div class="card center stack">
-        <div class="label">Room code — share with everyone</div>
+        <div class="label">${t(lang, "roomCodeLabel")}</div>
         <div class="big-code">${esc(H.code)}</div>
-        <div class="small">They open this same website and tap Join</div>
+        <div class="small">${t(lang, "roomCodeHint")}</div>
       </div>` : `
-      <div class="card center waiting-pulse">Waiting for the host to start…</div>`}
+      <div class="card center waiting-pulse">${t(lang, "waitingHostStart")}</div>`}
     <div class="card">
-      <div class="label">Players (${v.players.length})</div>
+      <div class="label">${tf(lang, "playersLabel", { n: v.players.length })}</div>
       <div>${chips}</div>
     </div>
+    ${v.isHost ? langToggleCard(lang, v.lang, "actLang") : `
+      <div class="card center small">${t(lang, "langDisplayPrefix")}${v.lang === "es" ? t(lang, "langEsBtn") : t(lang, "langEnBtn")}</div>`}
     ${v.isHost ? `
       <div class="card stack">
-        <div class="label">Game mode</div>
+        <div class="label">${t(lang, "gameModeLabel")}</div>
         <div class="row">
-          <button class="word-btn ${v.mode === "type" ? "selected" : ""}" onclick="actMode('type')">⌨️ Type it</button>
-          <button class="word-btn ${v.mode === "local" ? "selected" : ""}" onclick="actMode('local')">🗣️ Say it aloud</button>
+          <button class="word-btn ${v.mode === "type" ? "selected" : ""}" onclick="actMode('type')">${t(lang, "modeTypeBtn")}</button>
+          <button class="word-btn ${v.mode === "local" ? "selected" : ""}" onclick="actMode('local')">${t(lang, "modeLocalBtn")}</button>
         </div>
-        <div class="small center">${v.mode === "type"
-          ? "Each pair types their guesses on their phones — the app checks the match. Great for playing remotely."
-          : "Each pair counts down and says their word out loud, then taps We matched / No match. Great for playing in the same room."}</div>
+        <div class="small center">${v.mode === "type" ? t(lang, "modeTypeDesc") : t(lang, "modeLocalDesc")}</div>
       </div>` : `
-      <div class="card center small">Mode: ${v.mode === "type" ? "⌨️ Type it" : "🗣️ Say it aloud"}</div>`}
+      <div class="card center small">${t(lang, "modeDisplayPrefix")}${v.mode === "type" ? t(lang, "modeTypeBtn") : t(lang, "modeLocalBtn")}</div>`}
     ${v.isHost ? `<button onclick="actStart()" ${v.players.length < 2 ? "disabled" : ""}>
-      ${v.players.length < 2 ? "Need at least 2 players" : "Start game"}</button>` : ""}`;
+      ${v.players.length < 2 ? t(lang, "needMorePlayers") : t(lang, "startGameBtn")}</button>` : ""}`;
 }
 
-function roundHeader(v) {
+function roundHeader(v, lang) {
   return `<div class="round-header card">
-    <div class="rnum">Round ${v.round} of ${v.totalRounds}</div>
-    ${v.bye ? `<div class="partner">You sit out this round 😌</div>`
-            : `<div class="partner">You + ${esc(v.partner)}</div>`}
+    <div class="rnum">${tf(lang, "roundLabel", { r: v.round, t: v.totalRounds })}</div>
+    ${v.bye ? `<div class="partner">${t(lang, "youSitOut")}</div>`
+            : `<div class="partner">${tf(lang, "youPlus", { partner: esc(v.partner) })}</div>`}
   </div>`;
 }
 
-function hostControls(v) {
+function hostControls(v, lang) {
   if (!v.isHost) return "";
   return `<div class="stack">
     <button onclick="actNext()" ${v.allDone ? "" : "disabled"}>
-      ${v.round >= v.totalRounds ? "Finish game" : "Next round"}${v.allDone ? "" : " (waiting for pairs)"}</button>
-    <button class="secondary" onclick="actEnd()">End game now</button>
+      ${v.round >= v.totalRounds ? t(lang, "finishGameBtn") : t(lang, "nextRoundBtn")}${v.allDone ? "" : t(lang, "waitingForPairsSuffix")}</button>
+    <button class="secondary" onclick="actEnd()">${t(lang, "endGameBtn")}</button>
   </div>`;
 }
 
-function pairsStatus(v) {
+function pairsStatus(v, lang) {
   if (!v.pairsStatus) return "";
   const rows = v.pairsStatus.map(p => `
     <div class="pr"><span>${esc(p.names[0])} + ${esc(p.names[1])}</span>
-    <span class="st ${p.done ? (p.points ? "done" : "fail") : ""}">${p.done ? (p.points ? "✓ +" + p.points.join(" / +") + " pts" : "✗ no match") : "playing…"}</span></div>`).join("");
-  return `<div class="card"><div class="label">This round</div><div class="pairs-list">${rows}</div></div>`;
+    <span class="st ${p.done ? (p.points ? "done" : "fail") : ""}">${p.done ? (p.points ? "✓ +" + p.points.join(" / +") + " pts" : t(lang, "noMatchStatus")) : t(lang, "playingStatus")}</span></div>`).join("");
+  return `<div class="card"><div class="label">${t(lang, "thisRoundLabel")}</div><div class="pairs-list">${rows}</div></div>`;
 }
 
 function renderRound(v) {
+  const lang = v.lang || uiLang;
   let body = "";
   if (v.bye) {
-    body = `<div class="card center">Relax — you're back in next round.</div>`;
+    body = `<div class="card center">${t(lang, "relaxNextRound")}</div>`;
   } else if (v.phase === "pick") {
     body = `
       <div class="card stack">
-        <div class="label">Pick one of your secret words</div>
+        <div class="label">${t(lang, "pickWordLabel")}</div>
         ${v.hand.map(w => `<button class="word-btn ${v.myPick === w ? "selected" : ""}"
           ${v.myPick ? "disabled" : ""} onclick="actPick('${esc(w)}')">${esc(w)}</button>`).join("")}
         <div class="status-banner ${v.myPick ? "waiting-pulse" : ""}">
-          ${v.myPick ? (v.partnerPicked ? "" : esc(v.partner) + " is still picking…")
-                     : (v.partnerPicked ? esc(v.partner) + " already picked!" : "Your partner is picking too")}
+          ${v.myPick ? (v.partnerPicked ? "" : tf(lang, "stillPicking", { partner: esc(v.partner) }))
+                     : (v.partnerPicked ? tf(lang, "alreadyPicked", { partner: esc(v.partner) }) : t(lang, "partnerPickingToo"))}
         </div>
       </div>`;
   } else { // guess or done
     const hist = v.history.map((h, i) => h.mine == null ? `
       <div class="history-row">
-        <span>Chance ${i + 1}</span>
+        <span>${tf(lang, "chanceHistLabel", { n: i + 1 })}</span>
         <span class="mark">${h.match ? "🤝" : "≠"}</span>
-        <span>${h.match ? "Matched!" : "No match"}</span>
+        <span>${h.match ? t(lang, "matchedHist") : t(lang, "noMatchHist")}</span>
       </div>` : `
       <div class="history-row">
         <span>${esc(h.mine)}</span>
@@ -686,70 +940,71 @@ function renderRound(v) {
       body = `
         <div class="card stack">
           <div class="pair-words">
-            <div class="pair-word"><span class="who">Your word</span>${esc(v.myWord)}</div>
+            <div class="pair-word"><span class="who">${t(lang, "yourWordLabel")}</span>${esc(v.myWord)}</div>
             <span class="vs">↔</span>
-            <div class="pair-word"><span class="who">${esc(v.partner)}'s word</span>${esc(v.partnerWord)}</div>
+            <div class="pair-word"><span class="who">${tf(lang, "partnerWordLabel", { partner: esc(v.partner) })}</span>${esc(v.partnerWord)}</div>
           </div>
-          <div class="center"><span class="attempt-pill">Chance ${v.attempt} of 3 — worth ${v.scoring[v.attempt][0]}–${v.scoring[v.attempt][1]} pts</span></div>
+          <div class="center"><span class="attempt-pill">${tf(lang, "chanceLabel", { a: v.attempt, lo: v.scoring[v.attempt][0], hi: v.scoring[v.attempt][1] })}</span></div>
           ${hist ? `<div class="stack">${hist}</div>` : ""}
-          <div class="label center">Count down together — 3, 2, 1 — and say your word out loud!</div>
+          <div class="label center">${t(lang, "countdownLabel")}</div>
           <div class="row">
-            <button onclick="actResult(true)">🤝 We matched!</button>
-            <button class="secondary" onclick="actResult(false)">✗ No match</button>
+            <button onclick="actResult(true)">${t(lang, "weMatchedBtn")}</button>
+            <button class="secondary" onclick="actResult(false)">${t(lang, "noMatchBtn")}</button>
           </div>
-          <div class="small center">Either of you can tap the result</div>
+          <div class="small center">${t(lang, "eitherCanTap")}</div>
         </div>`;
     } else if (v.phase === "guess") {
       body = `
         <div class="card stack">
           <div class="pair-words">
-            <div class="pair-word"><span class="who">Your word</span>${esc(v.myWord)}</div>
+            <div class="pair-word"><span class="who">${t(lang, "yourWordLabel")}</span>${esc(v.myWord)}</div>
             <span class="vs">↔</span>
-            <div class="pair-word"><span class="who">${esc(v.partner)}'s word</span>${esc(v.partnerWord)}</div>
+            <div class="pair-word"><span class="who">${tf(lang, "partnerWordLabel", { partner: esc(v.partner) })}</span>${esc(v.partnerWord)}</div>
           </div>
-          <div class="center"><span class="attempt-pill">Chance ${v.attempt} of 3 — worth ${v.scoring[v.attempt][0]}–${v.scoring[v.attempt][1]} pts</span></div>
+          <div class="center"><span class="attempt-pill">${tf(lang, "chanceLabel", { a: v.attempt, lo: v.scoring[v.attempt][0], hi: v.scoring[v.attempt][1] })}</span></div>
           ${hist ? `<div class="stack">${hist}</div>` : ""}
           ${v.guessed
-            ? `<div class="status-banner waiting-pulse">Waiting for ${esc(v.partner)}…</div>`
-            : `<div class="label center">Type the word in between — same time as ${esc(v.partner)}!</div>
-               <input type="text" id="guessInput" placeholder="Your guess" autocomplete="off"
+            ? `<div class="status-banner waiting-pulse">${tf(lang, "waitingForPartner", { partner: esc(v.partner) })}</div>`
+            : `<div class="label center">${tf(lang, "typeInBetween", { partner: esc(v.partner) })}</div>
+               <input type="text" id="guessInput" placeholder="${esc(t(lang, "guessPlaceholder"))}" autocomplete="off"
                  onkeydown="if(event.key==='Enter')actGuess()">
-               <button onclick="actGuess()">Lock in ${v.partnerGuessed ? "— " + esc(v.partner) + " is ready!" : ""}</button>`}
+               <button onclick="actGuess()">${t(lang, "lockInBtn")} ${v.partnerGuessed ? tf(lang, "partnerReadySuffix", { partner: esc(v.partner) }) : ""}</button>`}
         </div>`;
     } else { // done
       body = `
         <div class="card stack">
           <div class="pair-words">
-            <div class="pair-word"><span class="who">Your word</span>${esc(v.myWord)}</div>
+            <div class="pair-word"><span class="who">${t(lang, "yourWordLabel")}</span>${esc(v.myWord)}</div>
             <span class="vs">↔</span>
-            <div class="pair-word"><span class="who">${esc(v.partner)}'s word</span>${esc(v.partnerWord)}</div>
+            <div class="pair-word"><span class="who">${tf(lang, "partnerWordLabel", { partner: esc(v.partner) })}</span>${esc(v.partnerWord)}</div>
           </div>
           ${hist ? `<div class="stack">${hist}</div>` : ""}
           <div class="match-flash ${v.points ? "good" : "bad"}">
-            ${v.points ? "🤝 MIND MELD! +" + v.points + " pts for you" : "😵 No match this time"}
+            ${v.points ? tf(lang, "matchedFlash", { points: v.points }) : t(lang, "noMatchFlash")}
           </div>
-          ${v.points ? `<div class="center small">${esc(v.partner)} rolled +${v.partnerPoints} pts</div>` : ""}
-          <div class="status-banner">Waiting for other pairs / next round…</div>
+          ${v.points ? `<div class="center small">${tf(lang, "partnerRolled", { partner: esc(v.partner), points: v.partnerPoints })}</div>` : ""}
+          <div class="status-banner">${t(lang, "waitingNextRound")}</div>
         </div>`;
     }
   }
   $app.innerHTML = `
-    ${header()}
-    ${roundHeader(v)}
+    ${header(lang)}
+    ${roundHeader(v, lang)}
     ${body}
-    ${pairsStatus(v)}
-    <div class="card"><div class="label">Scoreboard</div>${scoreTable(v)}</div>
-    ${hostControls(v)}`;
+    ${pairsStatus(v, lang)}
+    <div class="card"><div class="label">${t(lang, "scoreboardLabel")}</div>${scoreTable(v, false, lang)}</div>
+    ${hostControls(v, lang)}`;
   const gi = document.getElementById("guessInput");
   if (gi) gi.focus();
 }
 
 function renderEnd(v) {
+  const lang = v.lang || uiLang;
   $app.innerHTML = `
-    ${header()}
-    <div class="card center"><div class="match-flash good">🏆 Final Scores</div>${scoreTable(v, true)}</div>
-    ${v.isHost ? `<button onclick="location.reload()">New game</button>`
-               : `<div class="card center small">Thanks for playing! Host can start a new game.</div>`}`;
+    ${header(lang)}
+    <div class="card center"><div class="match-flash good">${t(lang, "finalScoresTitle")}</div>${scoreTable(v, true, lang)}</div>
+    ${v.isHost ? `<button onclick="location.reload()">${t(lang, "newGameBtn")}</button>`
+               : `<div class="card center small">${t(lang, "thanksPlaying")}</div>`}`;
 }
 
 renderHome();
