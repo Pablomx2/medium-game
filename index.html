@@ -110,6 +110,10 @@
   }
   .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--good); }
   .dot.off { background: var(--bad); }
+  button.chip-x {
+    background: none; border: none; color: var(--muted);
+    width: auto; padding: 0 0 0 2px; font-size: 1rem; line-height: 1; cursor: pointer;
+  }
   .status-banner {
     text-align: center; color: var(--muted); font-size: .95rem;
     padding: 4px 0;
@@ -310,6 +314,9 @@ const T = {
     gameAlreadyStarted: "Game already started",
     roomFull: "This room is full (20 players max).",
     lostConnection: "Lost connection to host.",
+    removedByHost: "The host removed you from the room.",
+    skippedStatus: "✗ disconnected",
+    roundSkippedFlash: "😴 Round skipped — a player disconnected",
     backBtn: "Back",
     roomCodeLabel: "Room code — share with everyone",
     roomCodeHint: "They open this same website and tap Join",
@@ -394,6 +401,9 @@ const T = {
     gameAlreadyStarted: "La partida ya comenzó",
     roomFull: "Esta sala está llena (máximo 20 jugadores).",
     lostConnection: "Se perdió la conexión con el anfitrión.",
+    removedByHost: "El anfitrión te eliminó de la sala.",
+    skippedStatus: "✗ desconexión",
+    roundSkippedFlash: "😴 Ronda omitida — un jugador se desconectó",
     backBtn: "Atrás",
     roomCodeLabel: "Código de la sala — compártelo con todos",
     roomCodeHint: "Ellos abren este mismo sitio y tocan Unirse",
@@ -476,6 +486,9 @@ const MAX_ATTEMPTS = 3;
 const HAND_SIZE = 3;
 const MAX_PLAYERS = 20;
 const PEER_PREFIX = "medium-mindmeld-";
+const PING_INTERVAL = 3000;      // host → guest ping cadence
+const HEARTBEAT_TIMEOUT = 12000; // host drops a guest silent this long
+const GUEST_TIMEOUT = 15000;     // guest shows "lost connection" after host silence
 
 const $app = document.getElementById("app");
 const norm = s => (s || "").trim().toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "");
@@ -558,13 +571,53 @@ function nextRound() {
   H.roundIndex++;
   if (H.roundIndex >= H.schedule.length) { H.stage = "end"; broadcast(); return; }
   H.stage = "round";
-  const pairIds = H.schedule[H.roundIndex];
+  const connected = new Set(H.players.filter(p => p.connected).map(p => p.id));
+  const pairIds = H.schedule[H.roundIndex].filter(([a, b]) => connected.has(a) && connected.has(b));
   const inRound = new Set(pairIds.flat());
   H.byeId = H.players.map(p => p.id).find(id => !inRound.has(id)) ?? null;
   H.pairs = pairIds.map(([a, b]) => ({
     a, b, phase: "pick", picks: {}, guesses: {}, attempt: 1, history: [], pointsBy: null,
   }));
   broadcast();
+}
+
+/* Pairs with a disconnected member can never finish — mark them done so the round can end */
+function resolveStuckPairs() {
+  if (H.stage !== "round") return;
+  H.pairs.forEach(pair => {
+    if (pair.phase === "done") return;
+    if (!hostPlayer(pair.a)?.connected || !hostPlayer(pair.b)?.connected) {
+      pair.phase = "done";
+      pair.skipped = true;
+    }
+  });
+}
+
+/* Shared drop path: PeerJS close event + heartbeat health check both land here */
+function dropPlayer(id) {
+  const p = H.players.find(p => p.id === id);
+  if (!p) return;
+  if (H.stage === "lobby") H.players = H.players.filter(x => x.id !== id);
+  else p.connected = false;
+  resolveStuckPairs();
+  broadcast();
+}
+
+function hostHealthCheck() {
+  const now = Date.now();
+  // players who dropped mid-game linger as disconnected; purge them once back in the lobby
+  if (H.stage === "lobby" && H.players.some(p => !p.connected)) {
+    H.players = H.players.filter(p => p.connected);
+    broadcast();
+  }
+  H.players.forEach(p => {
+    if (p.id === "me" || !p.connected || !p.conn) return;
+    if (p.conn.open === false || (p.lastSeen && now - p.lastSeen > HEARTBEAT_TIMEOUT)) {
+      dropPlayer(p.id);
+    } else {
+      try { p.conn.send({ t: "ping" }); } catch (e) {}
+    }
+  });
 }
 
 function pairOf(id) { return H.pairs.find(p => p.a === id || p.b === id); }
@@ -655,6 +708,7 @@ function viewFor(id) {
   base.pairsStatus = H.pairs.map(p => ({
     names: [hostPlayer(p.a).name, hostPlayer(p.b).name],
     done: p.phase === "done",
+    skipped: !!p.skipped,
     points: p.pointsBy ? [p.pointsBy[p.a], p.pointsBy[p.b]] : null,
   }));
   base.allDone = H.pairs.every(p => p.phase === "done");
@@ -682,6 +736,7 @@ function viewFor(id) {
     base.partnerGuessed = pair.guesses[pid] !== undefined;
     base.points = pair.pointsBy ? pair.pointsBy[id] : 0;
     base.partnerPoints = pair.pointsBy ? pair.pointsBy[pid] : 0;
+    base.skipped = !!pair.skipped;
   }
   return base;
 }
@@ -704,35 +759,36 @@ function setupHost(name) {
     H.stage = "lobby";
     H.lang = uiLang;
     H.code = code;
+    setInterval(hostHealthCheck, PING_INTERVAL);
+    // pings pause while the host tab is hidden — give everyone a fresh grace period on return
+    document.addEventListener("visibilitychange", () => {
+      if (!document.hidden) H.players.forEach(p => { p.lastSeen = Date.now(); });
+    });
     broadcast();
   });
   peer.on("connection", conn => {
     conn.on("data", msg => {
+      const sender = H.players.find(p => p.id === conn.peer);
+      if (sender) sender.lastSeen = Date.now();
+      if (msg.t === "pong") return;
       if (msg.t === "join") {
         if (H.stage !== "lobby") {
           // allow reconnect by name mid-game
           const existing = H.players.find(p => p.name === msg.name && !p.connected);
-          if (existing) { existing.conn = conn; existing.id = conn.peer; existing.connected = true; broadcast(); return; }
+          if (existing) { existing.conn = conn; existing.id = conn.peer; existing.connected = true; existing.lastSeen = Date.now(); broadcast(); return; }
           conn.send({ t: "reject", reason: "started" }); return;
         }
         if (H.players.length >= MAX_PLAYERS) { conn.send({ t: "reject", reason: "full" }); return; }
         let nm = msg.name.trim().slice(0, 16) || "Player";
         while (H.players.some(p => p.name === nm)) nm += "'";
-        H.players.push({ id: conn.peer, name: nm, conn, score: 0, hand: [], connected: true });
+        H.players.push({ id: conn.peer, name: nm, conn, score: 0, hand: [], connected: true, lastSeen: Date.now() });
         conn.send({ t: "welcome", name: nm });
         broadcast();
       } else {
         hostMsg(conn.peer, msg);
       }
     });
-    conn.on("close", () => {
-      const p = H.players.find(p => p.id === conn.peer);
-      if (p) {
-        if (H.stage === "lobby") H.players = H.players.filter(x => x.id !== conn.peer);
-        else p.connected = false;
-        broadcast();
-      }
-    });
+    conn.on("close", () => dropPlayer(conn.peer));
   });
   peer.on("error", err => {
     if (err.type === "unavailable-id") setupHost(name); // code collision → retry
@@ -747,13 +803,30 @@ function setupGuest(name, code) {
   peer = new Peer();
   peer.on("open", () => {
     hostConn = peer.connect(PEER_PREFIX + code.toUpperCase(), { reliable: true });
-    hostConn.on("open", () => hostConn.send({ t: "join", name }));
-    hostConn.on("data", msg => {
-      if (msg.t === "view") { myView = msg.view; render(); }
-      else if (msg.t === "welcome") { myName = msg.name; }
-      else if (msg.t === "reject") { renderError(t(uiLang, msg.reason === "full" ? "roomFull" : "gameAlreadyStarted")); }
+    let lastHostSeen = 0;
+    let watchdog = null;
+    let ended = false;
+    const guestEnd = msg => { if (ended) return; ended = true; if (watchdog) clearInterval(watchdog); renderError(msg); };
+    hostConn.on("open", () => {
+      hostConn.send({ t: "join", name });
+      lastHostSeen = Date.now();
+      watchdog = setInterval(() => {
+        if (Date.now() - lastHostSeen > GUEST_TIMEOUT) guestEnd(t(curLang(), "lostConnection"));
+      }, PING_INTERVAL);
+      // timers/messages pause while this tab is hidden — grace period on return
+      document.addEventListener("visibilitychange", () => {
+        if (!document.hidden) lastHostSeen = Date.now();
+      });
     });
-    hostConn.on("close", () => renderError(t(curLang(), "lostConnection")));
+    hostConn.on("data", msg => {
+      lastHostSeen = Date.now();
+      if (msg.t === "ping") { try { hostConn.send({ t: "pong" }); } catch (e) {} }
+      else if (msg.t === "view") { myView = msg.view; render(); }
+      else if (msg.t === "welcome") { myName = msg.name; }
+      else if (msg.t === "removed") { guestEnd(t(curLang(), "removedByHost")); }
+      else if (msg.t === "reject") { guestEnd(t(uiLang, msg.reason === "full" ? "roomFull" : "gameAlreadyStarted")); }
+    });
+    hostConn.on("close", () => guestEnd(t(curLang(), "lostConnection")));
   });
   peer.on("error", err => {
     if (err.type === "peer-unavailable") renderError(tf(uiLang, "roomNotFound", { code: code.toUpperCase() }));
@@ -786,6 +859,17 @@ window.actStart = () => { if (role === "host") startGame(); };
 window.actNext = () => { if (role === "host") nextRound(); };
 window.actEnd = () => { if (role === "host") { H.stage = "end"; broadcast(); } };
 window.actBackToLobby = () => { if (role === "host") { H.stage = "lobby"; broadcast(); } };
+window.actKick = i => {
+  if (role !== "host" || H.stage !== "lobby") return;
+  const p = H.players[i];
+  if (!p || p.id === "me") return;
+  if (p.conn) {
+    try { p.conn.send({ t: "removed" }); } catch (e) {}
+    setTimeout(() => { try { p.conn.close(); } catch (e) {} }, 500); // let the message flush first
+  }
+  H.players = H.players.filter(x => x !== p);
+  broadcast();
+};
 
 /* ---------------- RENDERING ---------------- */
 function esc(s) { return String(s).replace(/[&<>"']/g, c => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;" }[c])); }
@@ -920,8 +1004,8 @@ function render() {
 
 function renderLobby(v) {
   const lang = v.lang || uiLang;
-  const chips = v.players.map(p =>
-    `<span class="player-chip"><span class="dot"></span>${esc(p.name)}${p.me ? t(lang, "youSuffix") : ""}</span>`).join("");
+  const chips = v.players.map((p, i) =>
+    `<span class="player-chip"><span class="dot ${p.connected === false ? "off" : ""}"></span>${esc(p.name)}${p.me ? t(lang, "youSuffix") : ""}${v.isHost && !p.me ? `<button class="chip-x" onclick="actKick(${i})">✕</button>` : ""}</span>`).join("");
   $app.innerHTML = `
     ${header(lang)}
     ${v.isHost ? `
@@ -974,7 +1058,7 @@ function pairsStatus(v, lang) {
   if (!v.pairsStatus) return "";
   const rows = v.pairsStatus.map(p => `
     <div class="pr"><span>${esc(p.names[0])} + ${esc(p.names[1])}</span>
-    <span class="st ${p.done ? (p.points ? "done" : "fail") : ""}">${p.done ? (p.points ? "✓ +" + p.points.join(" / +") + " pts" : t(lang, "noMatchStatus")) : t(lang, "playingStatus")}</span></div>`).join("");
+    <span class="st ${p.done ? (p.points ? "done" : "fail") : ""}">${p.done ? (p.points ? "✓ +" + p.points.join(" / +") + " pts" : t(lang, p.skipped ? "skippedStatus" : "noMatchStatus")) : t(lang, "playingStatus")}</span></div>`).join("");
   return `<div class="card"><div class="label">${t(lang, "thisRoundLabel")}</div><div class="pairs-list">${rows}</div></div>`;
 }
 
@@ -1043,14 +1127,15 @@ function renderRound(v) {
     } else { // done
       body = `
         <div class="card stack">
+          ${v.myWord && v.partnerWord ? `
           <div class="pair-words">
             <div class="pair-word"><span class="who">${t(lang, "yourWordLabel")}</span>${esc(v.myWord)}</div>
             <span class="vs">↔</span>
             <div class="pair-word"><span class="who">${tf(lang, "partnerWordLabel", { partner: esc(v.partner) })}</span>${esc(v.partnerWord)}</div>
-          </div>
+          </div>` : ""}
           ${hist ? `<div class="stack">${hist}</div>` : ""}
           <div class="match-flash ${v.points ? "good" : "bad"}">
-            ${v.points ? tf(lang, "matchedFlash", { points: v.points }) : t(lang, "noMatchFlash")}
+            ${v.points ? tf(lang, "matchedFlash", { points: v.points }) : t(lang, v.skipped ? "roundSkippedFlash" : "noMatchFlash")}
           </div>
           ${v.points ? `<div class="center small">${tf(lang, "partnerRolled", { partner: esc(v.partner), points: v.partnerPoints })}</div>` : ""}
           <div class="status-banner">${t(lang, "waitingNextRound")}</div>
