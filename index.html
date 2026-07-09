@@ -163,6 +163,7 @@
   .pairs-list .pr { display: flex; justify-content: space-between; background: var(--card2); border-radius: 10px; padding: 8px 12px; font-size: .9rem; }
   .pairs-list .pr .st { color: var(--muted); }
   .pairs-list .pr .st.done { color: var(--good); }
+  .pairs-list .pr .st.fail { color: var(--bad); }
 </style>
 </head>
 <body>
@@ -248,6 +249,7 @@ const H = {
   players: [],            // {id, name, conn|null, score, hand[], connected}
   deck: [], discard: [],
   stage: "lobby",         // lobby | round | end
+  mode: "type",           // 'type' = type guesses on phones | 'local' = say aloud, tap yes/no
   schedule: [],           // rounds: [ [ [idxA, idxB], ... ], ... ]
   roundIndex: -1,
   pairs: [],              // per current round: {a, b, phase, picks:{}, guesses:{}, attempt, history:[], points}
@@ -364,9 +366,28 @@ function handleGuess(id, word) {
   broadcast();
 }
 
+/* Local mode: pair said their words out loud — either player reports the result */
+function handleResult(id, match) {
+  const pair = pairOf(id);
+  if (H.mode !== "local" || !pair || pair.phase !== "guess") return;
+  pair.history.push({ a: null, b: null, match });
+  if (match) {
+    pair.points = POINTS[pair.attempt] || 1;
+    pair.phase = "done";
+    [pair.a, pair.b].forEach(pid => hostPlayer(pid).score += pair.points);
+  } else if (pair.attempt >= MAX_ATTEMPTS) {
+    pair.points = 0;
+    pair.phase = "done";
+  } else {
+    pair.attempt++;
+  }
+  broadcast();
+}
+
 function hostMsg(fromId, msg) {
   if (msg.t === "pick") handlePick(fromId, msg.word);
   else if (msg.t === "guess") handleGuess(fromId, msg.word);
+  else if (msg.t === "result") handleResult(fromId, !!msg.match);
 }
 
 /* Build the personalized view each player renders from */
@@ -380,6 +401,7 @@ function viewFor(id) {
     round: H.roundIndex + 1,
     totalRounds: H.schedule.length,
     scoring: POINTS,
+    mode: H.mode,
   };
   if (H.stage !== "round" || !me) return base;
 
@@ -501,6 +523,8 @@ window.actGuess = () => {
   if (!inp || !norm(inp.value)) return;
   send({ t: "guess", word: inp.value });
 };
+window.actResult = m => send({ t: "result", match: m });
+window.actMode = m => { if (role === "host" && H.stage === "lobby") { H.mode = m; broadcast(); } };
 window.actStart = () => { if (role === "host") startGame(); };
 window.actNext = () => { if (role === "host") nextRound(); };
 window.actEnd = () => { if (role === "host") { H.stage = "end"; broadcast(); } };
@@ -525,7 +549,7 @@ function renderHome() {
       </div>
     </div>
     <div class="card small">
-      <b>How to play:</b> each round you're paired with someone. You each pick one of your 3 secret words. Both words are revealed — now think of a word <i>in between</i> them and type it at the same time. Match on the 1st try: <b>3 pts</b> · 2nd: <b>2 pts</b> · 3rd: <b>1 pt</b>. Both of you score!
+      <b>How to play:</b> each round you're paired with someone. You each pick one of your 3 secret words. Both words are revealed — now think of a word <i>in between</i> them and say it at the same time (type it on your phone, or say it out loud in local mode). Match on the 1st try: <b>3 pts</b> · 2nd: <b>2 pts</b> · 3rd: <b>1 pt</b>. Both of you score!
     </div>`;
   const saved = localStorage.getItem("medium-name");
   if (saved) document.getElementById("nameInput").value = saved;
@@ -587,6 +611,18 @@ function renderLobby(v) {
       <div class="label">Players (${v.players.length})</div>
       <div>${chips}</div>
     </div>
+    ${v.isHost ? `
+      <div class="card stack">
+        <div class="label">Game mode</div>
+        <div class="row">
+          <button class="word-btn ${v.mode === "type" ? "selected" : ""}" onclick="actMode('type')">⌨️ Type it</button>
+          <button class="word-btn ${v.mode === "local" ? "selected" : ""}" onclick="actMode('local')">🗣️ Say it aloud</button>
+        </div>
+        <div class="small center">${v.mode === "type"
+          ? "Each pair types their guesses on their phones — the app checks the match. Great for playing remotely."
+          : "Each pair counts down and says their word out loud, then taps We matched / No match. Great for playing in the same room."}</div>
+      </div>` : `
+      <div class="card center small">Mode: ${v.mode === "type" ? "⌨️ Type it" : "🗣️ Say it aloud"}</div>`}
     ${v.isHost ? `<button onclick="actStart()" ${v.players.length < 2 ? "disabled" : ""}>
       ${v.players.length < 2 ? "Need at least 2 players" : "Start game"}</button>` : ""}`;
 }
@@ -612,7 +648,7 @@ function pairsStatus(v) {
   if (!v.pairsStatus) return "";
   const rows = v.pairsStatus.map(p => `
     <div class="pr"><span>${esc(p.names[0])} + ${esc(p.names[1])}</span>
-    <span class="st ${p.done ? "done" : ""}">${p.done ? (p.points ? "✓ " + p.points + " pts" : "✗ no match") : "playing…"}</span></div>`).join("");
+    <span class="st ${p.done ? (p.points ? "done" : "fail") : ""}">${p.done ? (p.points ? "✓ " + p.points + " pts" : "✗ no match") : "playing…"}</span></div>`).join("");
   return `<div class="card"><div class="label">This round</div><div class="pairs-list">${rows}</div></div>`;
 }
 
@@ -632,13 +668,35 @@ function renderRound(v) {
         </div>
       </div>`;
   } else { // guess or done
-    const hist = v.history.map((h, i) => `
+    const hist = v.history.map((h, i) => h.mine == null ? `
+      <div class="history-row">
+        <span>Chance ${i + 1}</span>
+        <span class="mark">${h.match ? "🤝" : "≠"}</span>
+        <span>${h.match ? "Matched!" : "No match"}</span>
+      </div>` : `
       <div class="history-row">
         <span>${esc(h.mine)}</span>
         <span class="mark">${h.match ? "🤝" : "≠"}</span>
         <span>${esc(h.theirs)}</span>
       </div>`).join("");
-    if (v.phase === "guess") {
+    if (v.phase === "guess" && v.mode === "local") {
+      body = `
+        <div class="card stack">
+          <div class="pair-words">
+            <div class="pair-word"><span class="who">Your word</span>${esc(v.myWord)}</div>
+            <span class="vs">↔</span>
+            <div class="pair-word"><span class="who">${esc(v.partner)}'s word</span>${esc(v.partnerWord)}</div>
+          </div>
+          <div class="center"><span class="attempt-pill">Chance ${v.attempt} of 3 — worth ${v.scoring[v.attempt]} pts</span></div>
+          ${hist ? `<div class="stack">${hist}</div>` : ""}
+          <div class="label center">Count down together — 3, 2, 1 — and say your word out loud!</div>
+          <div class="row">
+            <button onclick="actResult(true)">🤝 We matched!</button>
+            <button class="secondary" onclick="actResult(false)">✗ No match</button>
+          </div>
+          <div class="small center">Either of you can tap the result</div>
+        </div>`;
+    } else if (v.phase === "guess") {
       body = `
         <div class="card stack">
           <div class="pair-words">
