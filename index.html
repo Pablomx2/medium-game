@@ -1,0 +1,696 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Medium — Mind Meld Game</title>
+<script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
+<style>
+  :root {
+    --bg: #14121f;
+    --card: #1f1b31;
+    --card2: #2a2444;
+    --accent: #a78bfa;
+    --accent2: #f0abfc;
+    --good: #4ade80;
+    --bad: #f87171;
+    --text: #ece9f7;
+    --muted: #9d97b5;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
+  html, body { height: 100%; }
+  body {
+    background: radial-gradient(ellipse at top, #1d1833 0%, var(--bg) 60%);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    display: flex;
+    justify-content: center;
+    min-height: 100dvh;
+  }
+  #app {
+    width: 100%;
+    max-width: 480px;
+    padding: 20px 16px 40px;
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+  }
+  h1 {
+    font-size: 2rem;
+    text-align: center;
+    background: linear-gradient(90deg, var(--accent), var(--accent2));
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+    letter-spacing: 2px;
+  }
+  .tagline { text-align: center; color: var(--muted); font-size: .9rem; margin-top: -8px; }
+  .card {
+    background: var(--card);
+    border: 1px solid #332c52;
+    border-radius: 16px;
+    padding: 16px;
+  }
+  button {
+    font: inherit;
+    font-weight: 600;
+    color: #14121f;
+    background: linear-gradient(90deg, var(--accent), var(--accent2));
+    border: none;
+    border-radius: 12px;
+    padding: 14px 18px;
+    width: 100%;
+    cursor: pointer;
+    font-size: 1.05rem;
+    transition: transform .08s, opacity .15s;
+  }
+  button:active { transform: scale(.97); }
+  button:disabled { opacity: .35; cursor: default; }
+  button.secondary {
+    background: var(--card2);
+    color: var(--text);
+    border: 1px solid #443a6b;
+  }
+  button.word-btn {
+    background: var(--card2);
+    color: var(--text);
+    border: 2px solid #443a6b;
+    font-size: 1.15rem;
+    padding: 16px;
+  }
+  button.word-btn.selected { border-color: var(--accent); background: #35296b; }
+  input[type=text] {
+    font: inherit;
+    font-size: 1.1rem;
+    width: 100%;
+    padding: 14px;
+    border-radius: 12px;
+    border: 1px solid #443a6b;
+    background: var(--card2);
+    color: var(--text);
+    text-align: center;
+  }
+  input[type=text]:focus { outline: 2px solid var(--accent); }
+  .label { color: var(--muted); font-size: .8rem; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 6px; }
+  .big-code {
+    font-size: 2.4rem;
+    font-weight: 800;
+    letter-spacing: .5em;
+    text-align: center;
+    padding-left: .5em;
+    color: var(--accent2);
+  }
+  .stack { display: flex; flex-direction: column; gap: 10px; }
+  .row { display: flex; gap: 10px; align-items: center; }
+  .row > * { flex: 1; }
+  .player-chip {
+    display: inline-flex; align-items: center; gap: 6px;
+    background: var(--card2); border-radius: 999px;
+    padding: 6px 14px; margin: 3px; font-size: .95rem;
+  }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--good); }
+  .dot.off { background: var(--bad); }
+  .status-banner {
+    text-align: center; color: var(--muted); font-size: .95rem;
+    padding: 4px 0;
+  }
+  .pair-words {
+    display: flex; gap: 10px; justify-content: center; align-items: center;
+  }
+  .pair-word {
+    flex: 1;
+    background: var(--card2);
+    border: 2px solid var(--accent);
+    border-radius: 14px;
+    padding: 16px 8px;
+    text-align: center;
+    font-size: 1.25rem;
+    font-weight: 700;
+  }
+  .pair-word .who { display: block; font-size: .7rem; color: var(--muted); font-weight: 400; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 4px; }
+  .vs { color: var(--muted); font-size: .9rem; }
+  .attempt-pill {
+    display: inline-block; padding: 4px 12px; border-radius: 999px;
+    background: var(--card2); color: var(--accent2); font-weight: 700; font-size: .85rem;
+    border: 1px solid #443a6b;
+  }
+  .history-row {
+    display: flex; justify-content: space-between; align-items: center;
+    background: var(--card2); border-radius: 10px; padding: 10px 14px;
+    font-size: 1rem;
+  }
+  .history-row .mark { font-size: 1.1rem; }
+  .match-flash {
+    text-align: center; font-size: 1.6rem; font-weight: 800; padding: 10px;
+  }
+  .match-flash.good { color: var(--good); }
+  .match-flash.bad { color: var(--bad); }
+  table.score { width: 100%; border-collapse: collapse; }
+  table.score td, table.score th { padding: 10px 8px; text-align: left; border-bottom: 1px solid #332c52; }
+  table.score th { color: var(--muted); font-size: .75rem; text-transform: uppercase; letter-spacing: 1px; }
+  table.score td.pts { text-align: right; font-weight: 700; color: var(--accent2); }
+  table.score tr.me td { color: var(--accent); }
+  .round-header { text-align: center; }
+  .round-header .rnum { font-size: .8rem; color: var(--muted); text-transform: uppercase; letter-spacing: 2px; }
+  .round-header .partner { font-size: 1.3rem; font-weight: 700; margin-top: 2px; }
+  .waiting-pulse { animation: pulse 1.4s ease-in-out infinite; }
+  @keyframes pulse { 0%,100% { opacity: .5; } 50% { opacity: 1; } }
+  .hidden { display: none !important; }
+  .small { font-size: .85rem; color: var(--muted); }
+  .center { text-align: center; }
+  .scoring-note { font-size: .8rem; color: var(--muted); text-align: center; }
+  .pairs-list { display: flex; flex-direction: column; gap: 6px; }
+  .pairs-list .pr { display: flex; justify-content: space-between; background: var(--card2); border-radius: 10px; padding: 8px 12px; font-size: .9rem; }
+  .pairs-list .pr .st { color: var(--muted); }
+  .pairs-list .pr .st.done { color: var(--good); }
+</style>
+</head>
+<body>
+<div id="app"></div>
+
+<script>
+/* ============================================================
+   MEDIUM — a mind-meld party game
+   Host device = authoritative game server (via PeerJS/WebRTC).
+   Guests connect with a 4-letter room code.
+   ============================================================ */
+
+const WORDS = [
+"Fire","Water","Ocean","Mountain","Dream","Night","Star","Moon","Sun","Rain",
+"Storm","Cloud","River","Forest","Desert","Island","Snow","Ice","Wind","Thunder",
+"Music","Dance","Song","Guitar","Piano","Drum","Voice","Silence","Echo","Rhythm",
+"Love","Heart","Kiss","Wedding","Family","Friend","Baby","Mother","Father","Home",
+"House","Door","Window","Key","Wall","Roof","Garden","Bridge","Tower","Castle",
+"King","Queen","Crown","Knight","Dragon","Wizard","Magic","Spell","Ghost","Monster",
+"Zombie","Vampire","Witch","Angel","Devil","Heaven","Hell","Soul","Spirit","Bone",
+"Doctor","Hospital","Medicine","Nurse","Blood","Brain","Eye","Hand","Foot","Hair",
+"Money","Gold","Silver","Diamond","Treasure","Bank","Rich","Poor","Coin","Wallet",
+"School","Teacher","Student","Book","Pencil","Paper","Test","Grade","Library","Science",
+"Time","Clock","Hour","Minute","Calendar","Birthday","Party","Gift","Balloon","Cake",
+"Coffee","Tea","Milk","Sugar","Salt","Pepper","Bread","Butter","Cheese","Egg",
+"Pizza","Burger","Taco","Pasta","Soup","Salad","Rice","Chicken","Fish","Meat",
+"Apple","Banana","Orange","Grape","Lemon","Cherry","Peach","Melon","Coconut","Mango",
+"Dog","Cat","Bird","Horse","Cow","Pig","Sheep","Lion","Tiger","Bear",
+"Wolf","Fox","Rabbit","Mouse","Snake","Spider","Bee","Ant","Butterfly","Shark",
+"Whale","Dolphin","Octopus","Turtle","Frog","Elephant","Monkey","Giraffe","Zebra","Penguin",
+"Car","Truck","Bus","Train","Plane","Boat","Ship","Bicycle","Motorcycle","Rocket",
+"Road","Street","City","Town","Village","Country","Map","Travel","Vacation","Hotel",
+"Beach","Wave","Sand","Shell","Surf","Palm","Sunset","Sunrise","Horizon","Tide",
+"Winter","Summer","Spring","Autumn","Season","Weather","Fog","Rainbow","Lightning","Hurricane",
+"Phone","Computer","Internet","Robot","Camera","Television","Radio","Battery","Screen","Button",
+"Game","Toy","Ball","Doll","Puzzle","Card","Dice","Chess","Race","Prize",
+"Soccer","Basketball","Baseball","Tennis","Golf","Boxing","Swimming","Running","Gym","Champion",
+"Movie","Actor","Theater","Stage","Spotlight","Director","Comedy","Drama","Hero","Villain",
+"Police","Thief","Crime","Prison","Judge","Lawyer","Gun","Sword","Shield","War",
+"Peace","Flag","Soldier","Army","Battle","Victory","Enemy","Spy","Secret","Mystery",
+"Fear","Anger","Joy","Sadness","Hope","Faith","Trust","Lie","Truth","Promise",
+"Sleep","Bed","Pillow","Blanket","Nightmare","Alarm","Morning","Breakfast","Lunch","Dinner",
+"Kitchen","Knife","Fork","Spoon","Plate","Cup","Glass","Bottle","Table","Chair",
+"Fireman","Chef","Pilot","Farmer","Artist","Singer","Dancer","Writer","Painter","Clown",
+"Circus","Zoo","Museum","Park","Playground","Swing","Slide","Fountain","Statue","Bench",
+"Tree","Flower","Rose","Grass","Leaf","Root","Seed","Branch","Mushroom","Cactus",
+"Jungle","Cave","Volcano","Earthquake","Canyon","Valley","Hill","Cliff","Waterfall","Lake",
+"Space","Planet","Earth","Mars","Galaxy","Alien","Astronaut","Comet","Orbit","Gravity",
+"Light","Shadow","Dark","Candle","Lamp","Torch","Flash","Glow","Spark","Flame",
+"Letter","Stamp","Mail","Message","News","Newspaper","Story","Poem","Legend","Myth",
+"Church","Temple","Prayer","Bell","Choir","Holy","Miracle","Blessing","Ritual","Monk",
+"Pirate","Anchor","Sail","Compass","Captain","Crew","Cannon","Kraken","Parrot","Rum",
+"Cowboy","Ranch","Lasso","Sheriff","Duel","Saloon","Wagon","Horseshoe","Mine","Dust",
+"Ninja","Samurai","Karate","Master","Dojo","Honor","Blade","Stealth","Warrior","Sensei",
+"Chocolate","Candy","Cookie","Donut","Ice Cream","Honey","Jam","Popcorn","Pancake","Waffle",
+"Shirt","Pants","Shoes","Hat","Dress","Jacket","Sock","Glove","Scarf","Belt",
+"Mirror","Comb","Soap","Shower","Towel","Perfume","Makeup","Razor","Brush","Sink",
+"Pain","Dentist","Tooth","Smile","Laugh","Cry","Scream","Whisper","Shout","Sigh",
+"Luck","Chance","Risk","Bet","Casino","Jackpot","Fortune","Destiny","Wish","Curse",
+"Photo","Memory","Past","Future","Present","History","Ancient","Modern","Tradition","Change",
+"Work","Office","Boss","Meeting","Salary","Career","Retire","Deadline","Email","Desk",
+"Melody","Concert","Festival","Ticket","Crowd","Applause","Encore","Backstage","Microphone","Speaker",
+"Snowman","Igloo","Seal","Arctic","Frost","Glacier","Blizzard","Mitten","Sled","Skate"
+].filter((w,i,a) => !/\d/.test(w) && a.indexOf(w) === i);
+
+const POINTS = { 1: 3, 2: 2, 3: 1 };   // 1st / 2nd / 3rd chance
+const MAX_ATTEMPTS = 3;
+const HAND_SIZE = 3;
+const PEER_PREFIX = "medium-mindmeld-";
+
+const $app = document.getElementById("app");
+const norm = s => (s || "").trim().toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "");
+
+let peer = null;
+let role = null;          // 'host' | 'guest'
+let myId = "me";          // host uses 'me'; guests use their peer connection id
+let hostConn = null;      // guest → host connection
+let myView = null;        // last view received / computed
+let myName = "";
+
+/* ---------------- HOST STATE ---------------- */
+const H = {
+  players: [],            // {id, name, conn|null, score, hand[], connected}
+  deck: [], discard: [],
+  stage: "lobby",         // lobby | round | end
+  schedule: [],           // rounds: [ [ [idxA, idxB], ... ], ... ]
+  roundIndex: -1,
+  pairs: [],              // per current round: {a, b, phase, picks:{}, guesses:{}, attempt, history:[], points}
+  byeId: null,
+};
+
+/* ---------------- HELPERS ---------------- */
+function shuffle(arr) {
+  for (let i = arr.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [arr[i], arr[j]] = [arr[j], arr[i]];
+  }
+  return arr;
+}
+function drawWord() {
+  if (!H.deck.length) { H.deck = shuffle(H.discard.splice(0)); }
+  if (!H.deck.length) { H.deck = shuffle([...WORDS]); } // full recycle fallback
+  return H.deck.pop();
+}
+function roomCode() {
+  const abc = "ABCDEFGHJKLMNPQRSTUVWXYZ";
+  return Array.from({length: 4}, () => abc[Math.floor(Math.random() * abc.length)]).join("");
+}
+
+/* Round-robin schedule (circle method) — every pair exactly once, no repeats */
+function buildSchedule(ids) {
+  const list = [...ids];
+  if (list.length % 2 === 1) list.push(null); // bye slot
+  const n = list.length;
+  const rounds = [];
+  const arr = [...list];
+  for (let r = 0; r < n - 1; r++) {
+    const pairs = [];
+    for (let i = 0; i < n / 2; i++) {
+      const a = arr[i], b = arr[n - 1 - i];
+      if (a !== null && b !== null) pairs.push([a, b]);
+    }
+    rounds.push(pairs);
+    arr.splice(1, 0, arr.pop()); // rotate all but first
+  }
+  return shuffle(rounds);
+}
+
+/* ---------------- HOST LOGIC ---------------- */
+function hostPlayer(id) { return H.players.find(p => p.id === id); }
+
+function startGame() {
+  if (H.players.length < 2) return;
+  H.deck = shuffle([...WORDS]);
+  H.discard = [];
+  H.players.forEach(p => { p.score = 0; p.hand = Array.from({length: HAND_SIZE}, drawWord); });
+  H.schedule = buildSchedule(H.players.map(p => p.id));
+  H.roundIndex = -1;
+  nextRound();
+}
+
+function nextRound() {
+  H.roundIndex++;
+  if (H.roundIndex >= H.schedule.length) { H.stage = "end"; broadcast(); return; }
+  H.stage = "round";
+  const pairIds = H.schedule[H.roundIndex];
+  const inRound = new Set(pairIds.flat());
+  H.byeId = H.players.map(p => p.id).find(id => !inRound.has(id)) ?? null;
+  H.pairs = pairIds.map(([a, b]) => ({
+    a, b, phase: "pick", picks: {}, guesses: {}, attempt: 1, history: [], points: 0,
+  }));
+  broadcast();
+}
+
+function pairOf(id) { return H.pairs.find(p => p.a === id || p.b === id); }
+function partnerId(pair, id) { return pair.a === id ? pair.b : pair.a; }
+
+function handlePick(id, word) {
+  const pair = pairOf(id);
+  const pl = hostPlayer(id);
+  if (!pair || pair.phase !== "pick" || !pl || pair.picks[id]) return;
+  if (!pl.hand.includes(word)) return;
+  pair.picks[id] = word;
+  if (pair.picks[pair.a] && pair.picks[pair.b]) {
+    pair.phase = "guess";
+    // discard chosen words + refill hands
+    [pair.a, pair.b].forEach(pid => {
+      const pp = hostPlayer(pid);
+      const w = pair.picks[pid];
+      pp.hand.splice(pp.hand.indexOf(w), 1);
+      H.discard.push(w);
+      pp.hand.push(drawWord());
+    });
+  }
+  broadcast();
+}
+
+function handleGuess(id, word) {
+  const pair = pairOf(id);
+  if (!pair || pair.phase !== "guess" || pair.guesses[id] !== undefined) return;
+  if (!norm(word)) return;
+  pair.guesses[id] = word.trim();
+  if (pair.guesses[pair.a] !== undefined && pair.guesses[pair.b] !== undefined) {
+    const ga = pair.guesses[pair.a], gb = pair.guesses[pair.b];
+    const match = norm(ga) === norm(gb);
+    pair.history.push({ a: ga, b: gb, match });
+    pair.guesses = {};
+    if (match) {
+      pair.points = POINTS[pair.attempt] || 1;
+      pair.phase = "done";
+      [pair.a, pair.b].forEach(pid => hostPlayer(pid).score += pair.points);
+    } else if (pair.attempt >= MAX_ATTEMPTS) {
+      pair.points = 0;
+      pair.phase = "done";
+    } else {
+      pair.attempt++;
+    }
+  }
+  broadcast();
+}
+
+function hostMsg(fromId, msg) {
+  if (msg.t === "pick") handlePick(fromId, msg.word);
+  else if (msg.t === "guess") handleGuess(fromId, msg.word);
+}
+
+/* Build the personalized view each player renders from */
+function viewFor(id) {
+  const me = hostPlayer(id);
+  const base = {
+    stage: H.stage,
+    myName: me?.name || "",
+    isHost: id === "me",
+    players: H.players.map(p => ({ name: p.name, score: p.score, connected: p.connected, me: p.id === id })),
+    round: H.roundIndex + 1,
+    totalRounds: H.schedule.length,
+    scoring: POINTS,
+  };
+  if (H.stage !== "round" || !me) return base;
+
+  base.pairsStatus = H.pairs.map(p => ({
+    names: [hostPlayer(p.a).name, hostPlayer(p.b).name],
+    done: p.phase === "done",
+    points: p.points,
+  }));
+  base.allDone = H.pairs.every(p => p.phase === "done");
+
+  const pair = pairOf(id);
+  if (!pair) { base.bye = true; return base; }
+
+  const pid = partnerId(pair, id);
+  base.partner = hostPlayer(pid).name;
+  base.phase = pair.phase;
+  base.attempt = pair.attempt;
+  base.history = pair.history.map(h => ({
+    mine: pair.a === id ? h.a : h.b,
+    theirs: pair.a === id ? h.b : h.a,
+    match: h.match,
+  }));
+  if (pair.phase === "pick") {
+    base.hand = me.hand;
+    base.myPick = pair.picks[id] || null;
+    base.partnerPicked = !!pair.picks[pid];
+  } else {
+    base.myWord = pair.picks[id];
+    base.partnerWord = pair.picks[pid];
+    base.guessed = pair.guesses[id] !== undefined;
+    base.partnerGuessed = pair.guesses[pid] !== undefined;
+    base.points = pair.points;
+  }
+  return base;
+}
+
+function broadcast() {
+  H.players.forEach(p => {
+    const v = viewFor(p.id);
+    if (p.id === "me") { myView = v; render(); }
+    else if (p.conn && p.connected) { try { p.conn.send({ t: "view", view: v }); } catch (e) {} }
+  });
+}
+
+function setupHost(name) {
+  role = "host"; myName = name; myId = "me";
+  const code = roomCode();
+  renderConnecting("Creating room…");
+  peer = new Peer(PEER_PREFIX + code);
+  peer.on("open", () => {
+    H.players = [{ id: "me", name, conn: null, score: 0, hand: [], connected: true }];
+    H.stage = "lobby";
+    H.code = code;
+    broadcast();
+  });
+  peer.on("connection", conn => {
+    conn.on("data", msg => {
+      if (msg.t === "join") {
+        if (H.stage !== "lobby") {
+          // allow reconnect by name mid-game
+          const existing = H.players.find(p => p.name === msg.name && !p.connected);
+          if (existing) { existing.conn = conn; existing.id = conn.peer; existing.connected = true; broadcast(); return; }
+          conn.send({ t: "reject", reason: "Game already started" }); return;
+        }
+        let nm = msg.name.trim().slice(0, 16) || "Player";
+        while (H.players.some(p => p.name === nm)) nm += "'";
+        H.players.push({ id: conn.peer, name: nm, conn, score: 0, hand: [], connected: true });
+        conn.send({ t: "welcome", name: nm });
+        broadcast();
+      } else {
+        hostMsg(conn.peer, msg);
+      }
+    });
+    conn.on("close", () => {
+      const p = H.players.find(p => p.id === conn.peer);
+      if (p) {
+        if (H.stage === "lobby") H.players = H.players.filter(x => x.id !== conn.peer);
+        else p.connected = false;
+        broadcast();
+      }
+    });
+  });
+  peer.on("error", err => {
+    if (err.type === "unavailable-id") setupHost(name); // code collision → retry
+    else renderError("Connection error: " + err.type);
+  });
+}
+
+/* ---------------- GUEST LOGIC ---------------- */
+function setupGuest(name, code) {
+  role = "guest"; myName = name;
+  renderConnecting("Joining room " + code + "…");
+  peer = new Peer();
+  peer.on("open", () => {
+    hostConn = peer.connect(PEER_PREFIX + code.toUpperCase(), { reliable: true });
+    hostConn.on("open", () => hostConn.send({ t: "join", name }));
+    hostConn.on("data", msg => {
+      if (msg.t === "view") { myView = msg.view; render(); }
+      else if (msg.t === "welcome") { myName = msg.name; }
+      else if (msg.t === "reject") { renderError(msg.reason); }
+    });
+    hostConn.on("close", () => renderError("Lost connection to host."));
+  });
+  peer.on("error", err => {
+    if (err.type === "peer-unavailable") renderError("Room “" + code.toUpperCase() + "” not found. Check the code.");
+    else renderError("Connection error: " + err.type);
+  });
+}
+
+function send(msg) {
+  if (role === "host") hostMsg("me", msg);
+  else if (hostConn) hostConn.send(msg);
+}
+
+/* ---------------- ACTIONS (both roles) ---------------- */
+window.actPick = w => send({ t: "pick", word: w });
+window.actGuess = () => {
+  const inp = document.getElementById("guessInput");
+  if (!inp || !norm(inp.value)) return;
+  send({ t: "guess", word: inp.value });
+};
+window.actStart = () => { if (role === "host") startGame(); };
+window.actNext = () => { if (role === "host") nextRound(); };
+window.actEnd = () => { if (role === "host") { H.stage = "end"; broadcast(); } };
+
+/* ---------------- RENDERING ---------------- */
+function esc(s) { return String(s).replace(/[&<>"']/g, c => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;" }[c])); }
+
+function header() {
+  return `<h1>MEDIUM</h1><div class="tagline">Think of a word between the two words. Match minds, score points.</div>`;
+}
+
+function renderHome() {
+  $app.innerHTML = `
+    ${header()}
+    <div class="card stack">
+      <div class="label">Your name</div>
+      <input type="text" id="nameInput" maxlength="16" placeholder="Name" autocomplete="off">
+      <button onclick="uiHost()">Host a game</button>
+      <div class="row">
+        <input type="text" id="codeInput" maxlength="4" placeholder="CODE" autocomplete="off" style="text-transform:uppercase; letter-spacing:.3em">
+        <button class="secondary" onclick="uiJoin()">Join</button>
+      </div>
+    </div>
+    <div class="card small">
+      <b>How to play:</b> each round you're paired with someone. You each pick one of your 3 secret words. Both words are revealed — now think of a word <i>in between</i> them and type it at the same time. Match on the 1st try: <b>3 pts</b> · 2nd: <b>2 pts</b> · 3rd: <b>1 pt</b>. Both of you score!
+    </div>`;
+  const saved = localStorage.getItem("medium-name");
+  if (saved) document.getElementById("nameInput").value = saved;
+}
+window.uiHost = () => {
+  const n = document.getElementById("nameInput").value.trim();
+  if (!n) return alert("Enter your name first");
+  localStorage.setItem("medium-name", n);
+  setupHost(n);
+};
+window.uiJoin = () => {
+  const n = document.getElementById("nameInput").value.trim();
+  const c = document.getElementById("codeInput").value.trim();
+  if (!n) return alert("Enter your name first");
+  if (c.length !== 4) return alert("Enter the 4-letter room code");
+  localStorage.setItem("medium-name", n);
+  setupGuest(n, c);
+};
+
+function renderConnecting(msg) {
+  $app.innerHTML = `${header()}<div class="card center waiting-pulse">${esc(msg)}</div>`;
+}
+function renderError(msg) {
+  $app.innerHTML = `${header()}
+    <div class="card center" style="border-color:var(--bad)">${esc(msg)}</div>
+    <button class="secondary" onclick="location.reload()">Back</button>`;
+}
+
+function scoreTable(v, final) {
+  const rows = [...v.players].sort((a, b) => b.score - a.score).map((p, i) => `
+    <tr class="${p.me ? "me" : ""}">
+      <td>${final && i === 0 ? "👑 " : ""}${esc(p.name)}${p.me ? " (you)" : ""}${p.connected === false ? " ⚠️" : ""}</td>
+      <td class="pts">${p.score}</td>
+    </tr>`).join("");
+  return `<table class="score"><tr><th>Player</th><th style="text-align:right">Points</th></tr>${rows}</table>`;
+}
+
+function render() {
+  const v = myView;
+  if (!v) return;
+  if (v.stage === "lobby") return renderLobby(v);
+  if (v.stage === "round") return renderRound(v);
+  if (v.stage === "end") return renderEnd(v);
+}
+
+function renderLobby(v) {
+  const chips = v.players.map(p =>
+    `<span class="player-chip"><span class="dot"></span>${esc(p.name)}${p.me ? " (you)" : ""}</span>`).join("");
+  $app.innerHTML = `
+    ${header()}
+    ${v.isHost ? `
+      <div class="card center stack">
+        <div class="label">Room code — share with everyone</div>
+        <div class="big-code">${esc(H.code)}</div>
+        <div class="small">They open this same website and tap Join</div>
+      </div>` : `
+      <div class="card center waiting-pulse">Waiting for the host to start…</div>`}
+    <div class="card">
+      <div class="label">Players (${v.players.length})</div>
+      <div>${chips}</div>
+    </div>
+    ${v.isHost ? `<button onclick="actStart()" ${v.players.length < 2 ? "disabled" : ""}>
+      ${v.players.length < 2 ? "Need at least 2 players" : "Start game"}</button>` : ""}`;
+}
+
+function roundHeader(v) {
+  return `<div class="round-header card">
+    <div class="rnum">Round ${v.round} of ${v.totalRounds}</div>
+    ${v.bye ? `<div class="partner">You sit out this round 😌</div>`
+            : `<div class="partner">You + ${esc(v.partner)}</div>`}
+  </div>`;
+}
+
+function hostControls(v) {
+  if (!v.isHost) return "";
+  return `<div class="stack">
+    <button onclick="actNext()" ${v.allDone ? "" : "disabled"}>
+      ${v.round >= v.totalRounds ? "Finish game" : "Next round"}${v.allDone ? "" : " (waiting for pairs)"}</button>
+    <button class="secondary" onclick="actEnd()">End game now</button>
+  </div>`;
+}
+
+function pairsStatus(v) {
+  if (!v.pairsStatus) return "";
+  const rows = v.pairsStatus.map(p => `
+    <div class="pr"><span>${esc(p.names[0])} + ${esc(p.names[1])}</span>
+    <span class="st ${p.done ? "done" : ""}">${p.done ? (p.points ? "✓ " + p.points + " pts" : "✗ no match") : "playing…"}</span></div>`).join("");
+  return `<div class="card"><div class="label">This round</div><div class="pairs-list">${rows}</div></div>`;
+}
+
+function renderRound(v) {
+  let body = "";
+  if (v.bye) {
+    body = `<div class="card center">Relax — you're back in next round.</div>`;
+  } else if (v.phase === "pick") {
+    body = `
+      <div class="card stack">
+        <div class="label">Pick one of your secret words</div>
+        ${v.hand.map(w => `<button class="word-btn ${v.myPick === w ? "selected" : ""}"
+          ${v.myPick ? "disabled" : ""} onclick="actPick('${esc(w)}')">${esc(w)}</button>`).join("")}
+        <div class="status-banner ${v.myPick ? "waiting-pulse" : ""}">
+          ${v.myPick ? (v.partnerPicked ? "" : esc(v.partner) + " is still picking…")
+                     : (v.partnerPicked ? esc(v.partner) + " already picked!" : "Your partner is picking too")}
+        </div>
+      </div>`;
+  } else { // guess or done
+    const hist = v.history.map((h, i) => `
+      <div class="history-row">
+        <span>${esc(h.mine)}</span>
+        <span class="mark">${h.match ? "🤝" : "≠"}</span>
+        <span>${esc(h.theirs)}</span>
+      </div>`).join("");
+    if (v.phase === "guess") {
+      body = `
+        <div class="card stack">
+          <div class="pair-words">
+            <div class="pair-word"><span class="who">Your word</span>${esc(v.myWord)}</div>
+            <span class="vs">↔</span>
+            <div class="pair-word"><span class="who">${esc(v.partner)}'s word</span>${esc(v.partnerWord)}</div>
+          </div>
+          <div class="center"><span class="attempt-pill">Chance ${v.attempt} of 3 — worth ${v.scoring[v.attempt]} pts</span></div>
+          ${hist ? `<div class="stack">${hist}</div>` : ""}
+          ${v.guessed
+            ? `<div class="status-banner waiting-pulse">Waiting for ${esc(v.partner)}…</div>`
+            : `<div class="label center">Type the word in between — same time as ${esc(v.partner)}!</div>
+               <input type="text" id="guessInput" placeholder="Your guess" autocomplete="off"
+                 onkeydown="if(event.key==='Enter')actGuess()">
+               <button onclick="actGuess()">Lock in ${v.partnerGuessed ? "— " + esc(v.partner) + " is ready!" : ""}</button>`}
+        </div>`;
+    } else { // done
+      body = `
+        <div class="card stack">
+          <div class="pair-words">
+            <div class="pair-word"><span class="who">Your word</span>${esc(v.myWord)}</div>
+            <span class="vs">↔</span>
+            <div class="pair-word"><span class="who">${esc(v.partner)}'s word</span>${esc(v.partnerWord)}</div>
+          </div>
+          ${hist ? `<div class="stack">${hist}</div>` : ""}
+          <div class="match-flash ${v.points ? "good" : "bad"}">
+            ${v.points ? "🤝 MIND MELD! +" + v.points + " pts each" : "😵 No match this time"}
+          </div>
+          <div class="status-banner">Waiting for other pairs / next round…</div>
+        </div>`;
+    }
+  }
+  $app.innerHTML = `
+    ${header()}
+    ${roundHeader(v)}
+    ${body}
+    ${pairsStatus(v)}
+    <div class="card"><div class="label">Scoreboard</div>${scoreTable(v)}</div>
+    ${hostControls(v)}`;
+  const gi = document.getElementById("guessInput");
+  if (gi) gi.focus();
+}
+
+function renderEnd(v) {
+  $app.innerHTML = `
+    ${header()}
+    <div class="card center"><div class="match-flash good">🏆 Final Scores</div>${scoreTable(v, true)}</div>
+    ${v.isHost ? `<button onclick="location.reload()">New game</button>`
+               : `<div class="card center small">Thanks for playing! Host can start a new game.</div>`}`;
+}
+
+renderHome();
+</script>
+</body>
+</html>
