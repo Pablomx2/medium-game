@@ -486,9 +486,6 @@ const MAX_ATTEMPTS = 3;
 const HAND_SIZE = 3;
 const MAX_PLAYERS = 20;
 const PEER_PREFIX = "medium-mindmeld-";
-const PING_INTERVAL = 3000;      // host → guest ping cadence
-const HEARTBEAT_TIMEOUT = 12000; // host drops a guest silent this long
-const GUEST_TIMEOUT = 15000;     // guest shows "lost connection" after host silence
 
 const $app = document.getElementById("app");
 const norm = s => (s || "").trim().toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "");
@@ -603,23 +600,6 @@ function dropPlayer(id) {
   broadcast();
 }
 
-function hostHealthCheck() {
-  const now = Date.now();
-  // players who dropped mid-game linger as disconnected; purge them once back in the lobby
-  if (H.stage === "lobby" && H.players.some(p => !p.connected)) {
-    H.players = H.players.filter(p => p.connected);
-    broadcast();
-  }
-  H.players.forEach(p => {
-    if (p.id === "me" || !p.connected || !p.conn) return;
-    if (p.conn.open === false || (p.lastSeen && now - p.lastSeen > HEARTBEAT_TIMEOUT)) {
-      dropPlayer(p.id);
-    } else {
-      try { p.conn.send({ t: "ping" }); } catch (e) {}
-    }
-  });
-}
-
 function pairOf(id) { return H.pairs.find(p => p.a === id || p.b === id); }
 function partnerId(pair, id) { return pair.a === id ? pair.b : pair.a; }
 
@@ -670,6 +650,9 @@ function handleGuess(id, word) {
 function handleResult(id, match) {
   const pair = pairOf(id);
   if (H.mode !== "local" || !pair || pair.phase !== "guess") return;
+  const now = Date.now();
+  if (pair.lastResultAt && now - pair.lastResultAt < 1200) return; // both tapped at once — count it once
+  pair.lastResultAt = now;
   pair.history.push({ a: null, b: null, match });
   if (match) {
     pair.pointsBy = { [pair.a]: rollPoints(pair.attempt), [pair.b]: rollPoints(pair.attempt) };
@@ -759,29 +742,21 @@ function setupHost(name) {
     H.stage = "lobby";
     H.lang = uiLang;
     H.code = code;
-    setInterval(hostHealthCheck, PING_INTERVAL);
-    // pings pause while the host tab is hidden — give everyone a fresh grace period on return
-    document.addEventListener("visibilitychange", () => {
-      if (!document.hidden) H.players.forEach(p => { p.lastSeen = Date.now(); });
-    });
     broadcast();
   });
   peer.on("connection", conn => {
     conn.on("data", msg => {
-      const sender = H.players.find(p => p.id === conn.peer);
-      if (sender) sender.lastSeen = Date.now();
-      if (msg.t === "pong") return;
       if (msg.t === "join") {
         if (H.stage !== "lobby") {
           // allow reconnect by name mid-game
           const existing = H.players.find(p => p.name === msg.name && !p.connected);
-          if (existing) { existing.conn = conn; existing.id = conn.peer; existing.connected = true; existing.lastSeen = Date.now(); broadcast(); return; }
+          if (existing) { existing.conn = conn; existing.id = conn.peer; existing.connected = true; broadcast(); return; }
           conn.send({ t: "reject", reason: "started" }); return;
         }
         if (H.players.length >= MAX_PLAYERS) { conn.send({ t: "reject", reason: "full" }); return; }
         let nm = msg.name.trim().slice(0, 16) || "Player";
         while (H.players.some(p => p.name === nm)) nm += "'";
-        H.players.push({ id: conn.peer, name: nm, conn, score: 0, hand: [], connected: true, lastSeen: Date.now() });
+        H.players.push({ id: conn.peer, name: nm, conn, score: 0, hand: [], connected: true });
         conn.send({ t: "welcome", name: nm });
         broadcast();
       } else {
@@ -803,25 +778,11 @@ function setupGuest(name, code) {
   peer = new Peer();
   peer.on("open", () => {
     hostConn = peer.connect(PEER_PREFIX + code.toUpperCase(), { reliable: true });
-    let lastHostSeen = 0;
-    let watchdog = null;
     let ended = false;
-    const guestEnd = msg => { if (ended) return; ended = true; if (watchdog) clearInterval(watchdog); renderError(msg); };
-    hostConn.on("open", () => {
-      hostConn.send({ t: "join", name });
-      lastHostSeen = Date.now();
-      watchdog = setInterval(() => {
-        if (Date.now() - lastHostSeen > GUEST_TIMEOUT) guestEnd(t(curLang(), "lostConnection"));
-      }, PING_INTERVAL);
-      // timers/messages pause while this tab is hidden — grace period on return
-      document.addEventListener("visibilitychange", () => {
-        if (!document.hidden) lastHostSeen = Date.now();
-      });
-    });
+    const guestEnd = msg => { if (ended) return; ended = true; renderError(msg); };
+    hostConn.on("open", () => hostConn.send({ t: "join", name }));
     hostConn.on("data", msg => {
-      lastHostSeen = Date.now();
-      if (msg.t === "ping") { try { hostConn.send({ t: "pong" }); } catch (e) {} }
-      else if (msg.t === "view") { myView = msg.view; render(); }
+      if (msg.t === "view") { myView = msg.view; render(); }
       else if (msg.t === "welcome") { myName = msg.name; }
       else if (msg.t === "removed") { guestEnd(t(curLang(), "removedByHost")); }
       else if (msg.t === "reject") { guestEnd(t(uiLang, msg.reason === "full" ? "roomFull" : "gameAlreadyStarted")); }
@@ -858,7 +819,12 @@ window.actLang = lang => {
 window.actStart = () => { if (role === "host") startGame(); };
 window.actNext = () => { if (role === "host") nextRound(); };
 window.actEnd = () => { if (role === "host") { H.stage = "end"; broadcast(); } };
-window.actBackToLobby = () => { if (role === "host") { H.stage = "lobby"; broadcast(); } };
+window.actBackToLobby = () => {
+  if (role !== "host") return;
+  H.players = H.players.filter(p => p.connected); // drop mid-game disconnects on the way back
+  H.stage = "lobby";
+  broadcast();
+};
 window.actKick = i => {
   if (role !== "host" || H.stage !== "lobby") return;
   const p = H.players[i];
