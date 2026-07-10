@@ -415,6 +415,7 @@ const T = {
     hideLogBtn: "📜 Hide match log",
     logMatchLine: "R{r}: {a} + {b} matched — {a} +{ptsA}, {b} +{ptsB}",
     logNoMatchLine: "R{r}: {a} + {b} — no match",
+    logEmptyMsg: "No results yet — check back once a pair finishes.",
     nowPlayingLabel: "👀 Now playing",
     spectatePickingStatus: "Still choosing their words…",
   },
@@ -531,6 +532,7 @@ const T = {
     hideLogBtn: "📜 Ocultar registro",
     logMatchLine: "R{r}: {a} + {b} coincidieron — {a} +{ptsA}, {b} +{ptsB}",
     logNoMatchLine: "R{r}: {a} + {b} — no coincidió",
+    logEmptyMsg: "Aún no hay resultados — vuelve a revisar cuando una pareja termine.",
     nowPlayingLabel: "👀 Jugando ahora",
     spectatePickingStatus: "Todavía eligiendo sus palabras…",
   },
@@ -1537,11 +1539,11 @@ let hostLogOpen = false;
 window.actToggleLog = () => { hostLogOpen = !hostLogOpen; render(); };
 
 function hostLogCard(v, lang) {
-  if (!v.isHost || !v.log || !v.log.length) return "";
-  const rows = [...v.log].reverse().map(e => `<div class="small">${e.match
+  if (!v.isHost || !v.log) return "";
+  const rows = v.log.length ? [...v.log].reverse().map(e => `<div class="small">${e.match
     ? tf(lang, "logMatchLine", { r: e.round, a: esc(e.names[0]), b: esc(e.names[1]), ptsA: e.points[0], ptsB: e.points[1] })
     : tf(lang, "logNoMatchLine", { r: e.round, a: esc(e.names[0]), b: esc(e.names[1]) })
-  }</div>`).join("");
+  }</div>`).join("") : `<div class="small">${t(lang, "logEmptyMsg")}</div>`;
   return `<div class="card stack">
     <button class="secondary" onclick="actToggleLog()">${t(lang, hostLogOpen ? "hideLogBtn" : "showLogBtn")} (${v.log.length})</button>
     ${hostLogOpen ? `<div class="stack">${rows}</div>` : ""}
