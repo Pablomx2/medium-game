@@ -947,11 +947,8 @@ window.actHostResult = (i, match) => { if (role === "host") hostSetResult(i, mat
 window.actSkipPair = i => { if (role === "host") skipPair(i); };
 window.actMode = m => { if (role === "host" && H.stage === "lobby") { H.mode = m; broadcast(); } };
 window.actLang = lang => {
-  if (role === "host" && H.stage === "lobby") {
-    H.lang = lang; uiLang = lang; localStorage.setItem("medium-lang", lang); broadcast();
-  } else if (!role) {
-    uiLang = lang; localStorage.setItem("medium-lang", lang); renderHome();
-  }
+  if (role !== "host" || H.stage !== "lobby") return;
+  H.lang = lang; uiLang = lang; localStorage.setItem("medium-lang", lang); broadcast();
 };
 window.actStart = () => { if (role === "host") startGame(); };
 window.actNext = () => { if (role === "host") nextRound(); };
@@ -997,7 +994,6 @@ function renderHome() {
   if (inviteCode) {
     $app.innerHTML = `
       ${header(lang)}
-      ${langToggleCard(lang, uiLang, "actLang")}
       <div class="card stack">
         <div class="label">${t(lang, "joiningRoomLabel")}</div>
         <div class="big-code" style="font-size:2rem">${esc(inviteCode)}</div>
@@ -1012,7 +1008,6 @@ function renderHome() {
   }
   $app.innerHTML = `
     ${header(lang)}
-    ${langToggleCard(lang, uiLang, "actLang")}
     <div class="card stack">
       <div class="label">${t(lang, "yourNameLabel")}</div>
       <input type="text" id="nameInput" maxlength="16" placeholder="${esc(t(lang, "namePlaceholder"))}" autocomplete="off">
