@@ -343,9 +343,16 @@ const T = {
     roundLabel: "Round {r} of {t}",
     youSitOut: "You sit out this round 😌",
     youPlus: "You + {partner}",
+    waitingYourTurnHeader: "Waiting for your turn…",
+    yourTurnHeader: "Your turn! 🤫",
+    waitingYourTurnStatus: "Hang tight — you'll be called on soon",
+    awaitingTurnHost: "Hasn't started yet",
+    waitingTurnStatus: "waiting…",
     pickWordLabel: "Pick one of your secret words",
     stillPicking: "{partner} is still picking…",
     alreadyPicked: "{partner} already picked!",
+    stillPickingAnon: "Your partner is still picking…",
+    alreadyPickedAnon: "Your partner already picked!",
     partnerPickingToo: "Your partner is picking too",
     chanceLabel: "Chance {a} of 3 — worth {lo}–{hi} pts",
     countdownLabel: "Count down together — 3, 2, 1 — and say your word out loud!",
@@ -433,9 +440,16 @@ const T = {
     roundLabel: "Ronda {r} de {t}",
     youSitOut: "Esta ronda descansas 😌",
     youPlus: "Tú + {partner}",
+    waitingYourTurnHeader: "Esperando tu turno…",
+    yourTurnHeader: "¡Tu turno! 🤫",
+    waitingYourTurnStatus: "Espera un momento — pronto te toca",
+    awaitingTurnHost: "Todavía no empieza",
+    waitingTurnStatus: "esperando…",
     pickWordLabel: "Elige una de tus palabras secretas",
     stillPicking: "{partner} todavía está eligiendo…",
     alreadyPicked: "¡{partner} ya eligió!",
+    stillPickingAnon: "Tu pareja todavía está eligiendo…",
+    alreadyPickedAnon: "¡Tu pareja ya eligió!",
     partnerPickingToo: "Tu pareja también está eligiendo",
     chanceLabel: "Oportunidad {a} de 3 — vale {lo}–{hi} pts",
     countdownLabel: "Cuenten juntos — 3, 2, 1 — ¡y digan su palabra en voz alta!",
@@ -554,6 +568,7 @@ const H = {
   schedule: [],           // rounds: [ [ [idxA, idxB], ... ], ... ]
   roundIndex: -1,
   pairs: [],              // per current round: {a, b, phase, picks:{}, guesses:{}, attempt, history:[], pointsBy}
+  activePair: 0,          // index into H.pairs — only this pair may pick/guess; the rest wait, grayed out
   byeId: null,
   connMap: {},            // live PeerJS conn.peer id → stable logical player id (survives reconnects)
 };
@@ -616,10 +631,22 @@ function nextRound() {
   const pairIds = H.schedule[H.roundIndex].filter(([a, b]) => connected.has(a) && connected.has(b));
   const inRound = new Set(pairIds.flat());
   H.byeId = H.players.map(p => p.id).find(id => !inRound.has(id)) ?? null;
-  H.pairs = pairIds.map(([a, b]) => ({
-    a, b, phase: "pick", picks: {}, guesses: {}, attempt: 1, history: [], pointsBy: null,
-  }));
+  // Turn order within the round is randomized — nobody (host included) picks who goes first.
+  // Only one pair is "pick"-able at a time; the rest sit at "waiting" (grayed out, partner hidden)
+  // until advanceActivePair() promotes them.
+  H.pairs = shuffle(pairIds.map(([a, b]) => ({
+    a, b, phase: "waiting", picks: {}, guesses: {}, attempt: 1, history: [], pointsBy: null,
+  })));
+  H.activePair = 0;
+  if (H.pairs.length) H.pairs[0].phase = "pick";
   broadcast();
+}
+
+/* Promote the next waiting pair to "pick" once the current one finishes — rounds still only
+   advance via the host's existing Next Round control, but pairs within a round flow automatically. */
+function advanceActivePair() {
+  const next = H.pairs.findIndex(p => p.phase === "waiting");
+  if (next !== -1) { H.activePair = next; H.pairs[next].phase = "pick"; }
 }
 
 /* Shared drop path: PeerJS close event + heartbeat health check both land here.
@@ -641,6 +668,7 @@ function skipPair(i) {
   if (hostPlayer(pair.a)?.connected && hostPlayer(pair.b)?.connected) return; // only for stuck/disconnected pairs
   pair.phase = "done";
   pair.skipped = true;
+  advanceActivePair();
   broadcast();
 }
 
@@ -697,8 +725,10 @@ function handleGuess(id, word) {
       pair.pointsBy = { [pair.a]: rollPoints(pair.attempt), [pair.b]: rollPoints(pair.attempt) };
       pair.phase = "done";
       [pair.a, pair.b].forEach(pid => hostPlayer(pid).score += pair.pointsBy[pid]);
+      advanceActivePair();
     } else if (pair.attempt >= MAX_ATTEMPTS) {
       pair.phase = "done";
+      advanceActivePair();
     } else {
       pair.attempt++;
     }
@@ -715,8 +745,10 @@ function hostSetResult(i, match) {
     pair.pointsBy = { [pair.a]: rollPoints(pair.attempt), [pair.b]: rollPoints(pair.attempt) };
     pair.phase = "done";
     [pair.a, pair.b].forEach(pid => hostPlayer(pid).score += pair.pointsBy[pid]);
+    advanceActivePair();
   } else if (pair.attempt >= MAX_ATTEMPTS) {
     pair.phase = "done";
+    advanceActivePair();
   } else {
     pair.attempt++;
   }
@@ -744,28 +776,32 @@ function viewFor(id) {
   };
   if (H.stage !== "round" || !me) return base;
 
-  base.pairsStatus = H.pairs.map(p => {
-    const row = {
-      names: [hostPlayer(p.a).name, hostPlayer(p.b).name],
-      done: p.phase === "done",
-      skipped: !!p.skipped,
-      points: p.pointsBy ? [p.pointsBy[p.a], p.pointsBy[p.b]] : null,
-      disconnected: !hostPlayer(p.a).connected || !hostPlayer(p.b).connected,
-    };
-    if (base.isHost && p.phase !== "done") {
-      row.phase = p.phase;
-      row.attempt = p.attempt;
-      row.words = p.phase !== "pick" ? [p.picks[p.a] ?? null, p.picks[p.b] ?? null] : null;
-    }
-    return row;
-  });
   base.allDone = H.pairs.every(p => p.phase === "done");
+
+  // Full pairing/turn overview (names, live progress, skip control) is host-only — players
+  // never see who's paired with whom, or who's up next, until their own turn reveals it.
+  if (base.isHost) {
+    base.pairsStatus = H.pairs.map(p => {
+      const row = {
+        names: [hostPlayer(p.a).name, hostPlayer(p.b).name],
+        done: p.phase === "done",
+        waiting: p.phase === "waiting",
+        skipped: !!p.skipped,
+        points: p.pointsBy ? [p.pointsBy[p.a], p.pointsBy[p.b]] : null,
+        disconnected: !hostPlayer(p.a).connected || !hostPlayer(p.b).connected,
+      };
+      if (p.phase !== "done") {
+        row.phase = p.phase;
+        row.attempt = p.attempt;
+        row.words = p.phase === "guess" || p.phase === "done" ? [p.picks[p.a] ?? null, p.picks[p.b] ?? null] : null;
+      }
+      return row;
+    });
+  }
 
   const pair = pairOf(id);
   if (!pair) { base.bye = true; return base; }
 
-  const pid = partnerId(pair, id);
-  base.partner = hostPlayer(pid).name;
   base.phase = pair.phase;
   base.attempt = pair.attempt;
   base.history = pair.history.map(h => ({
@@ -773,15 +809,33 @@ function viewFor(id) {
     theirs: pair.a === id ? h.b : h.a,
     match: h.match,
   }));
+
+  if (pair.phase === "waiting") {
+    // Not their turn yet — cards are visible but the UI grays them out, and the partner
+    // stays a mystery until this pair is actually promoted to "pick".
+    base.hand = me.hand;
+    base.myPick = null;
+    return base;
+  }
+
+  const pid = partnerId(pair, id);
   if (pair.phase === "pick") {
+    // Their turn has started, but the partner's identity still isn't revealed — only once
+    // both of them have locked in a word does the pairing become visible (see below).
     base.hand = me.hand;
     base.myPick = pair.picks[id] || null;
     base.partnerPicked = !!pair.picks[pid];
-  } else {
-    base.myWord = pair.picks[id];
-    base.partnerWord = pair.picks[pid];
+    return base;
+  }
+
+  // guess or done: both have picked, so the pairing is finally revealed
+  base.partner = hostPlayer(pid).name;
+  base.myWord = pair.picks[id];
+  base.partnerWord = pair.picks[pid];
+  if (pair.phase === "guess") {
     base.guessed = pair.guesses[id] !== undefined;
     base.partnerGuessed = pair.guesses[pid] !== undefined;
+  } else { // done
     base.points = pair.pointsBy ? pair.pointsBy[id] : 0;
     base.partnerPoints = pair.pointsBy ? pair.pointsBy[pid] : 0;
     base.skipped = !!pair.skipped;
@@ -1136,10 +1190,16 @@ function renderLobby(v) {
 }
 
 function roundHeader(v, lang) {
+  // Partner identity is a secret until both players in the pair have picked a word —
+  // until then, show a turn-status subtitle instead of a name.
+  let subtitle;
+  if (v.bye) subtitle = t(lang, "youSitOut");
+  else if (v.partner) subtitle = tf(lang, "youPlus", { partner: esc(v.partner) });
+  else if (v.phase === "waiting") subtitle = t(lang, "waitingYourTurnHeader");
+  else subtitle = t(lang, "yourTurnHeader");
   return `<div class="round-header card">
     <div class="rnum">${tf(lang, "roundLabel", { r: v.round, t: v.totalRounds })}</div>
-    ${v.bye ? `<div class="partner">${t(lang, "youSitOut")}</div>`
-            : `<div class="partner">${tf(lang, "youPlus", { partner: esc(v.partner) })}</div>`}
+    <div class="partner">${subtitle}</div>
   </div>`;
 }
 
@@ -1153,15 +1213,18 @@ function hostControls(v, lang) {
 }
 
 function pairsStatus(v, lang) {
+  // Host-only: players never see the pairing/turn overview, so this simply renders nothing for them.
   if (!v.pairsStatus) return "";
   const rows = v.pairsStatus.map((p, i) => {
     const label = `<span>${esc(p.names[0])} + ${esc(p.names[1])}${p.disconnected && !p.done ? ` <span class="small">(${t(lang, "skippedStatus")})</span>` : ""}</span>
-      <span class="st ${p.done ? (p.points ? "done" : "fail") : ""}">${p.done ? (p.points ? "✓ +" + p.points.join(" / +") + " pts" : t(lang, p.skipped ? "skippedStatus" : "noMatchStatus")) : t(lang, "playingStatus")}</span>`;
-    if (!v.isHost || p.done) {
+      <span class="st ${p.done ? (p.points ? "done" : "fail") : ""}">${p.done ? (p.points ? "✓ +" + p.points.join(" / +") + " pts" : t(lang, p.skipped ? "skippedStatus" : "noMatchStatus")) : t(lang, p.waiting ? "waitingTurnStatus" : "playingStatus")}</span>`;
+    if (p.done) {
       return `<div class="pr">${label}</div>`;
     }
     // Host-only live detail: current chance + the words once both are revealed
-    const detail = p.phase === "pick"
+    const detail = p.phase === "waiting"
+      ? t(lang, "awaitingTurnHost")
+      : p.phase === "pick"
       ? t(lang, "stillChoosingHost")
       : tf(lang, "chanceLabel", { a: p.attempt, lo: v.scoring[p.attempt][0], hi: v.scoring[p.attempt][1] })
         + (p.words && p.words[0] && p.words[1] ? ` — ${esc(p.words[0])} ↔ ${esc(p.words[1])}` : "");
@@ -1186,15 +1249,24 @@ function renderRound(v) {
   let body = "";
   if (v.bye) {
     body = `<div class="card center">${t(lang, "relaxNextRound")}</div>`;
+  } else if (v.phase === "waiting") {
+    // Not this pair's turn yet — cards shown but grayed out, no partner revealed.
+    body = `
+      <div class="card stack">
+        <div class="label">${t(lang, "pickWordLabel")}</div>
+        ${v.hand.map(w => `<button class="word-btn" disabled>${esc(w)}</button>`).join("")}
+        <div class="status-banner waiting-pulse">${t(lang, "waitingYourTurnStatus")}</div>
+      </div>`;
   } else if (v.phase === "pick") {
+    // Their turn, but the partner stays anonymous until both of them have picked.
     body = `
       <div class="card stack">
         <div class="label">${t(lang, "pickWordLabel")}</div>
         ${v.hand.map(w => `<button class="word-btn ${v.myPick === w ? "selected" : ""}"
           ${v.myPick ? "disabled" : ""} onclick="actPick('${esc(w)}')">${esc(w)}</button>`).join("")}
         <div class="status-banner ${v.myPick ? "waiting-pulse" : ""}">
-          ${v.myPick ? (v.partnerPicked ? "" : tf(lang, "stillPicking", { partner: esc(v.partner) }))
-                     : (v.partnerPicked ? tf(lang, "alreadyPicked", { partner: esc(v.partner) }) : t(lang, "partnerPickingToo"))}
+          ${v.myPick ? (v.partnerPicked ? "" : t(lang, "stillPickingAnon"))
+                     : (v.partnerPicked ? t(lang, "alreadyPickedAnon") : t(lang, "partnerPickingToo"))}
         </div>
       </div>`;
   } else { // guess or done
