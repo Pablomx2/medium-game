@@ -138,6 +138,13 @@
     background: var(--card2); color: var(--accent2); font-weight: 700; font-size: .85rem;
     border: 1px solid #443a6b;
   }
+  .timer-pill {
+    display: inline-block; padding: 4px 12px; border-radius: 999px; margin-left: 6px;
+    background: var(--card2); color: var(--text); font-weight: 700; font-size: .85rem;
+    border: 1px solid #443a6b; font-variant-numeric: tabular-nums;
+  }
+  .timer-pill.low { color: var(--bad); border-color: var(--bad); }
+  .timer-pill.paused { color: var(--muted); }
   .history-row {
     display: flex; justify-content: space-between; align-items: center;
     background: var(--card2); border-radius: 10px; padding: 10px 14px;
@@ -394,6 +401,16 @@ const T = {
     chanceHistLabel: "Chance {n}",
     matchedHist: "Matched!",
     noMatchHist: "No match",
+    pausedLabel: "⏸ Paused",
+    pausedBanner: "Paused by the host — hang tight",
+    timedOutFlash: "⏰ Time's up — no match",
+    waitingHostResume: "Waiting for the host to continue…",
+    timedOutHist: "Time's up",
+    timeUpStatus: "time's up — tap Continue",
+    pauseBtn: "⏸ Pause",
+    resumeBtn: "▶ Resume",
+    addTimeBtn: "+15s",
+    continueBtn: "▶ Continue",
   },
   es: {
     tagline: "Piensa en una palabra entre las dos palabras. Conecten mentes, sumen puntos.",
@@ -494,6 +511,16 @@ const T = {
     chanceHistLabel: "Oportunidad {n}",
     matchedHist: "¡Coincidieron!",
     noMatchHist: "No coincidió",
+    pausedLabel: "⏸ En pausa",
+    pausedBanner: "El anfitrión pausó — espera un momento",
+    timedOutFlash: "⏰ Se acabó el tiempo — no coincidió",
+    waitingHostResume: "Esperando a que el anfitrión continúe…",
+    timedOutHist: "Tiempo agotado",
+    timeUpStatus: "tiempo agotado — toca Continuar",
+    pauseBtn: "⏸ Pausa",
+    resumeBtn: "▶ Reanudar",
+    addTimeBtn: "+15s",
+    continueBtn: "▶ Continuar",
   },
 };
 function t(lang, key) {
@@ -511,6 +538,9 @@ const rollPoints = attempt => {
   return lo + Math.floor(Math.random() * (hi - lo + 1));
 };
 const MAX_ATTEMPTS = 3;
+const GUESS_TIME_MS = 45000;   // per chance, guess phase only
+const ADD_TIME_MS = 15000;     // host "+15s" button
+const TIMER_TICK_MS = 250;     // host-side expiry check cadence
 const HAND_SIZE = 3;
 const MAX_PLAYERS = 20;
 const PEER_PREFIX = "medium-mindmeld-";
@@ -587,6 +617,9 @@ const H = {
   activePair: 0,          // index into H.pairs — only this pair may pick/guess; the rest wait, grayed out
   byeId: null,
   connMap: {},            // live PeerJS conn.peer id → stable logical player id (survives reconnects)
+  timer: null,            // null | {pairIndex, deadline, remainingMs, paused} — 45s guess-phase countdown
+  timedOutPair: null,     // null | pairIndex — set after a timeout forces a no-match; freezes the game
+                          // until the host taps Continue (index can be 0 — always compare with !== null)
   kickedPids: new Set(),  // device pids permanently banned from this room (host used Kick) — survives reconnect attempts
   lastResult: null,       // snapshot for undoing the host's last local-mode We-matched/No-match tap
   lastGameRoster: null,   // {name, score, pid}[] from the game that just ended — for score continuity on restart
@@ -699,6 +732,7 @@ function captureLastGameRoster() {
 }
 
 function nextRound() {
+  clearTimerState();
   H.roundIndex++;
   if (H.roundIndex >= H.schedule.length) { H.stage = "end"; H.lastResult = null; captureLastGameRoster(); broadcast(); return; }
   H.stage = "round";
@@ -750,6 +784,8 @@ function skipPair(i) {
   const pair = H.pairs[i];
   if (!pair || pair.phase === "done") return;
   if (hostPlayer(pair.a)?.connected && hostPlayer(pair.b)?.connected) return; // only for stuck/disconnected pairs
+  if (H.timer && H.timer.pairIndex === i) H.timer = null;
+  if (H.timedOutPair === i) H.timedOutPair = null;
   invalidateUndo(i);
   pair.phase = "done";
   pair.skipped = true;
@@ -772,13 +808,62 @@ function kickPlayer(id) {
   if (H.stage === "round") {
     const pair = pairOf(id);
     if (pair && pair.phase !== "done") {
-      invalidateUndo(H.pairs.indexOf(pair));
+      const pairIndex = H.pairs.indexOf(pair);
+      if (H.timer && H.timer.pairIndex === pairIndex) H.timer = null;
+      if (H.timedOutPair === pairIndex) H.timedOutPair = null;
+      invalidateUndo(pairIndex);
       pair.phase = "done";
       pair.skipped = true;
       if (H.pairs[H.activePair] === pair) advanceActivePair();
     }
   }
   if (H.stage === "lobby") H.players = H.players.filter(x => x !== p);
+  broadcast();
+}
+
+/* ---------------- GUESS TIMER ---------------- */
+// Host-authoritative 45s-per-chance countdown, guess phase only. The host ticks a lightweight
+// interval and only broadcasts on state changes (start/expiry/pause/resume/+time) — never every
+// second, since broadcast() re-renders guests' whole screen and would wipe an in-progress guess.
+function isGameFrozen() { return H.timedOutPair !== null || (H.timer && H.timer.paused); }
+
+function startGuessTimer(i) {
+  H.timer = { pairIndex: i, deadline: Date.now() + GUESS_TIME_MS, remainingMs: null, paused: false };
+}
+function clearTimerState() { H.timer = null; H.timedOutPair = null; }
+
+function timerSnapshot() {
+  if (!H.timer) return null;
+  const remainingMs = H.timer.paused ? H.timer.remainingMs : Math.max(0, H.timer.deadline - Date.now());
+  return { remainingMs, paused: !!H.timer.paused };
+}
+
+let guessTimerLoop = null;
+function startGuessTimerLoop() {
+  if (guessTimerLoop) return;
+  guessTimerLoop = setInterval(() => {
+    if (H.stage !== "round" || !H.timer || H.timer.paused) return;
+    if (Date.now() >= H.timer.deadline) handleGuessTimeout();
+  }, TIMER_TICK_MS);
+}
+
+/* A chance's 45s ran out with no match: force a "not match" (recording whatever partial
+   guesses exist) and freeze the game — the host must tap Continue before play resumes,
+   even if this was the pair's 3rd and final chance. */
+function handleGuessTimeout() {
+  const i = H.timer.pairIndex;
+  H.timer = null; // null out before the stale-phase check so a queued timeout can never re-fire
+  const pair = H.pairs[i];
+  if (!pair || pair.phase !== "guess") return;
+  // A timeout is a definitive, non-reversible transition — unlike invalidateUndo()'s "only clear
+  // if a *different* pair moved" rule (meant for concurrent pairs), a pending undo snapshot for
+  // THIS pair must not survive its own timeout, since Undo has no way to also un-freeze it.
+  H.lastResult = null;
+  pair.history.push({ a: pair.guesses[pair.a] ?? null, b: pair.guesses[pair.b] ?? null, match: false, timeout: true });
+  pair.guesses = {};
+  if (pair.attempt >= MAX_ATTEMPTS) pair.phase = "done"; // advanceActivePair deferred to actContinue
+  else pair.attempt++;
+  H.timedOutPair = i;
   broadcast();
 }
 
@@ -804,11 +889,12 @@ function partnerId(pair, id) { return pair.a === id ? pair.b : pair.a; }
 function handlePick(id, word) {
   const pair = pairOf(id);
   const pl = hostPlayer(id);
-  if (!pair || pair.phase !== "pick" || !pl || pair.picks[id]) return;
+  if (isGameFrozen() || !pair || pair.phase !== "pick" || !pl || pair.picks[id]) return;
   if (!pl.hand.includes(word)) return;
   pair.picks[id] = word;
   if (pair.picks[pair.a] && pair.picks[pair.b]) {
     pair.phase = "guess";
+    startGuessTimer(H.pairs.indexOf(pair));
     // discard chosen words + refill hands
     [pair.a, pair.b].forEach(pid => {
       const pp = hostPlayer(pid);
@@ -823,7 +909,7 @@ function handlePick(id, word) {
 
 function handleGuess(id, word) {
   const pair = pairOf(id);
-  if (!pair || pair.phase !== "guess" || pair.guesses[id] !== undefined) return;
+  if (isGameFrozen() || !pair || pair.phase !== "guess" || pair.guesses[id] !== undefined) return;
   if (!norm(word)) return;
   invalidateUndo(H.pairs.indexOf(pair));
   pair.guesses[id] = word.trim();
@@ -835,13 +921,16 @@ function handleGuess(id, word) {
     if (match) {
       pair.pointsBy = { [pair.a]: rollPoints(pair.attempt), [pair.b]: rollPoints(pair.attempt) };
       pair.phase = "done";
+      H.timer = null;
       [pair.a, pair.b].forEach(pid => hostPlayer(pid).score += pair.pointsBy[pid]);
       advanceActivePair();
     } else if (pair.attempt >= MAX_ATTEMPTS) {
       pair.phase = "done";
+      H.timer = null;
       advanceActivePair();
     } else {
       pair.attempt++;
+      startGuessTimer(H.pairs.indexOf(pair));
     }
   }
   broadcast();
@@ -851,7 +940,7 @@ function handleGuess(id, word) {
    This is a manual human tap, so it's the one action worth letting the host undo (see actUndoResult). */
 function hostSetResult(i, match) {
   const pair = H.pairs[i];
-  if (H.mode !== "local" || !pair || pair.phase !== "guess") return;
+  if (isGameFrozen() || H.mode !== "local" || !pair || pair.phase !== "guess") return;
   invalidateUndo(i);
   H.lastResult = {
     pairIndex: i,
@@ -867,13 +956,16 @@ function hostSetResult(i, match) {
   if (match) {
     pair.pointsBy = { [pair.a]: rollPoints(pair.attempt), [pair.b]: rollPoints(pair.attempt) };
     pair.phase = "done";
+    H.timer = null;
     [pair.a, pair.b].forEach(pid => hostPlayer(pid).score += pair.pointsBy[pid]);
     H.lastResult.promotedIndex = advanceActivePair();
   } else if (pair.attempt >= MAX_ATTEMPTS) {
     pair.phase = "done";
+    H.timer = null;
     H.lastResult.promotedIndex = advanceActivePair();
   } else {
     pair.attempt++;
+    startGuessTimer(i);
   }
   broadcast();
 }
@@ -895,6 +987,7 @@ function undoLastResult() {
   hostPlayer(pair.b).score = prevScoreB;
   if (bothConnected) {
     pair.phase = "guess";
+    startGuessTimer(pairIndex);
     if (promotedIndex !== -1) H.pairs[promotedIndex].phase = "waiting";
     H.activePair = prevActivePair;
   } else {
@@ -934,7 +1027,7 @@ function viewFor(id) {
   // Full pairing/turn overview (names, live progress, skip control) is host-only — players
   // never see who's paired with whom, or who's up next, until their own turn reveals it.
   if (base.isHost) {
-    base.pairsStatus = H.pairs.map(p => {
+    base.pairsStatus = H.pairs.map((p, i) => {
       const row = {
         names: [hostPlayer(p.a).name, hostPlayer(p.b).name],
         done: p.phase === "done",
@@ -943,11 +1036,13 @@ function viewFor(id) {
         skipped: !!p.skipped,
         points: p.pointsBy ? [p.pointsBy[p.a], p.pointsBy[p.b]] : null,
         disconnected: !hostPlayer(p.a).connected || !hostPlayer(p.b).connected,
+        timedOut: H.timedOutPair === i,
       };
       if (p.phase !== "done") {
         row.phase = p.phase;
         row.attempt = p.attempt;
         row.words = p.phase === "guess" || p.phase === "done" ? [p.picks[p.a] ?? null, p.picks[p.b] ?? null] : null;
+        row.timer = H.timer && H.timer.pairIndex === i ? timerSnapshot() : null;
       }
       return row;
     });
@@ -964,7 +1059,9 @@ function viewFor(id) {
     mine: pair.a === id ? h.a : h.b,
     theirs: pair.a === id ? h.b : h.a,
     match: h.match,
+    timeout: !!h.timeout,
   }));
+  base.timedOutWaiting = H.timedOutPair === H.pairs.indexOf(pair);
 
   if (pair.phase === "waiting") {
     // Not their turn yet — cards are visible but the UI grays them out, and the partner
@@ -991,6 +1088,7 @@ function viewFor(id) {
   if (pair.phase === "guess") {
     base.guessed = pair.guesses[id] !== undefined;
     base.partnerGuessed = pair.guesses[pid] !== undefined;
+    base.timer = H.timer && H.timer.pairIndex === H.pairs.indexOf(pair) ? timerSnapshot() : null;
   } else { // done
     base.points = pair.pointsBy ? pair.pointsBy[id] : 0;
     base.partnerPoints = pair.pointsBy ? pair.pointsBy[pid] : 0;
@@ -1019,6 +1117,7 @@ function setupHost(name) {
     H.lang = uiLang;
     H.code = code;
     startHeartbeat();
+    startGuessTimerLoop();
     broadcast();
   });
   peer.on("connection", conn => {
@@ -1173,11 +1272,33 @@ window.actLang = lang => {
 };
 window.actStart = () => { if (role === "host") startGame(); };
 window.actNext = () => { if (role === "host") nextRound(); };
-window.actEnd = () => { if (role === "host") { H.stage = "end"; H.lastResult = null; captureLastGameRoster(); broadcast(); } };
+window.actEnd = () => { if (role === "host") { clearTimerState(); H.stage = "end"; H.lastResult = null; captureLastGameRoster(); broadcast(); } };
 window.actBackToLobby = () => {
   if (role !== "host") return;
+  clearTimerState();
   H.players = H.players.filter(p => p.connected); // drop mid-game disconnects on the way back
   H.stage = "lobby";
+  broadcast();
+};
+window.actTimerPause = () => {
+  if (role !== "host" || !H.timer) return;
+  if (H.timer.paused) { H.timer.deadline = Date.now() + H.timer.remainingMs; H.timer.paused = false; }
+  else { H.timer.remainingMs = Math.max(0, H.timer.deadline - Date.now()); H.timer.paused = true; }
+  broadcast();
+};
+window.actTimerAdd = () => {
+  if (role !== "host" || !H.timer) return;
+  if (H.timer.paused) H.timer.remainingMs += ADD_TIME_MS;
+  else H.timer.deadline += ADD_TIME_MS;
+  broadcast();
+};
+window.actContinue = () => {
+  if (role !== "host" || H.timedOutPair === null) return;
+  const i = H.timedOutPair;
+  H.timedOutPair = null;
+  const pair = H.pairs[i];
+  if (pair && pair.phase === "guess") startGuessTimer(i); // more chances left — fresh 45s
+  else advanceActivePair();                                 // was the 3rd-chance timeout — promote next pair
   broadcast();
 };
 window.actKick = id => { if (role === "host") kickPlayer(id); };
@@ -1304,13 +1425,45 @@ function scoreTable(v, final, lang) {
   return `<table class="score"><tr><th>${t(lang, "playerCol")}</th><th style="text-align:right">${t(lang, "pointsCol")}</th></tr>${rows}</table>`;
 }
 
+// Client-side countdown animation: the host only broadcasts a remainingMs *snapshot* on state
+// changes (never every second — broadcast() re-renders the whole screen and would wipe an
+// in-progress guess). Guests animate that snapshot locally against their own clock, touching
+// only .js-countdown elements' textContent so nothing else re-renders mid-tick.
+let countdownInterval = null;
+function syncCountdown(v) {
+  if (countdownInterval) { clearInterval(countdownInterval); countdownInterval = null; }
+  const snap = v.timer || (v.pairsStatus && (v.pairsStatus.find(p => p.timer) || {}).timer);
+  const els = document.querySelectorAll(".js-countdown");
+  if (!els.length || !snap || snap.paused) return;
+  const anchor = Date.now(), base = snap.remainingMs;
+  const draw = () => {
+    const s = Math.max(0, Math.ceil((base - (Date.now() - anchor)) / 1000));
+    els.forEach(el => { el.textContent = `⏱ ${s}s`; el.classList.toggle("low", s <= 10); });
+  };
+  draw();
+  countdownInterval = setInterval(draw, 250);
+}
+function stopCountdown() {
+  if (countdownInterval) { clearInterval(countdownInterval); countdownInterval = null; }
+}
+
+// The guess input's value lives only in the DOM, and every broadcast (partner locking in,
+// timer pause/resume, a disconnect elsewhere) replaces $app.innerHTML — save the draft
+// before each re-render and restore it after, but only within the same chance: the
+// signature (round + partner + attempt) changes whenever a fresh chance should start empty.
+// The draft is stamped with the sig of the render that created the input (lastRenderSig),
+// not the incoming one — otherwise a just-submitted word still sitting in the old DOM when
+// a failed chance re-renders would leak into the next chance's empty input.
+let guessDraft = null;    // {sig, value, selStart, selEnd}
+let lastRenderSig = null; // draftSig of the most recent round render
+
 function render() {
   const v = myView;
   if (!v) return;
   document.documentElement.lang = v.lang || uiLang;
-  if (v.stage === "lobby") return renderLobby(v);
+  if (v.stage === "lobby") { stopCountdown(); guessDraft = null; return renderLobby(v); }
   if (v.stage === "round") return renderRound(v);
-  if (v.stage === "end") return renderEnd(v);
+  if (v.stage === "end") { stopCountdown(); guessDraft = null; return renderEnd(v); }
 }
 
 function renderLobby(v) {
@@ -1381,8 +1534,13 @@ function pairsStatus(v, lang) {
   const rows = v.pairsStatus.map((p, i) => {
     const label = `<span>${esc(p.names[0])} + ${esc(p.names[1])}${p.disconnected && !p.done ? ` <span class="small">(${t(lang, "skippedStatus")})</span>` : ""}</span>
       <span class="st ${p.done ? (p.points ? "done" : "fail") : ""}">${p.done ? (p.points ? "✓ +" + p.points.join(" / +") + " pts" : t(lang, p.skipped ? "skippedStatus" : "noMatchStatus")) : t(lang, p.waiting ? "waitingTurnStatus" : "playingStatus")}</span>`;
+    const continueButton = p.timedOut
+      ? `<div class="small">⏰ ${t(lang, "timeUpStatus")}</div><button onclick="actContinue()">${t(lang, "continueBtn")}</button>` : "";
     if (p.done) {
-      return `<div class="pr">${label}</div>`;
+      return `<div class="pr" style="flex-direction:column; align-items:stretch; gap:6px">
+        <div style="display:flex; justify-content:space-between">${label}</div>
+        ${continueButton}
+      </div>`;
     }
     // Host-only live detail: current chance + the words once both are revealed
     const detail = p.phase === "waiting"
@@ -1391,7 +1549,14 @@ function pairsStatus(v, lang) {
       ? t(lang, "stillChoosingHost")
       : tf(lang, "chanceLabel", { a: p.attempt, lo: v.scoring[p.attempt][0], hi: v.scoring[p.attempt][1] })
         + (p.words && p.words[0] && p.words[1] ? ` — ${esc(p.words[0])} ↔ ${esc(p.words[1])}` : "");
-    const matchButtons = v.mode === "local" && p.phase === "guess" ? `
+    const timerPill = p.timer
+      ? `<span class="timer-pill js-countdown ${p.timer.paused ? "paused" : ""}">${p.timer.paused ? t(lang, "pausedLabel") : `⏱ ${Math.ceil(p.timer.remainingMs / 1000)}s`}</span>` : "";
+    const timerButtons = p.timer ? `
+        <div class="row">
+          <button class="secondary" onclick="actTimerPause()">${t(lang, p.timer.paused ? "resumeBtn" : "pauseBtn")}</button>
+          <button class="secondary" onclick="actTimerAdd()">${t(lang, "addTimeBtn")}</button>
+        </div>` : "";
+    const matchButtons = v.mode === "local" && p.phase === "guess" && !p.timedOut ? `
         <div class="row">
           <button onclick="actHostResult(${i}, true)">${t(lang, "weMatchedBtn")}</button>
           <button class="secondary" onclick="actHostResult(${i}, false)">${t(lang, "noMatchBtn")}</button>
@@ -1399,7 +1564,9 @@ function pairsStatus(v, lang) {
     const skipButton = p.disconnected ? `<button class="secondary" onclick="actSkipPair(${i})">${t(lang, "skipPairBtn")}</button>` : "";
     return `<div class="pr ${p.active ? "pr-active" : ""}" style="flex-direction:column; align-items:stretch; gap:6px">
       <div style="display:flex; justify-content:space-between">${p.active ? `<span class="pr-active-tag">▶ </span>` : ""}${label}</div>
-      <div class="small">${detail}</div>
+      <div class="small">${detail}${timerPill}</div>
+      ${timerButtons}
+      ${continueButton}
       ${matchButtons}
       ${skipButton}
     </div>`;
@@ -1433,7 +1600,12 @@ function renderRound(v) {
         </div>
       </div>`;
   } else { // guess or done
-    const hist = v.history.map((h, i) => h.mine == null ? `
+    const hist = v.history.map((h, i) => h.timeout ? `
+      <div class="history-row">
+        <span>${h.mine ? esc(h.mine) : "—"}</span>
+        <span class="mark">⏰</span>
+        <span>${t(lang, "timedOutHist")}</span>
+      </div>` : h.mine == null ? `
       <div class="history-row">
         <span>${tf(lang, "chanceHistLabel", { n: i + 1 })}</span>
         <span class="mark">${h.match ? "🤝" : "≠"}</span>
@@ -1444,7 +1616,9 @@ function renderRound(v) {
         <span class="mark">${h.match ? "🤝" : "≠"}</span>
         <span>${esc(h.theirs)}</span>
       </div>`).join("");
-    if (v.phase === "guess" && v.mode === "local") {
+    const timerPill = v.timer
+      ? `<span class="timer-pill js-countdown ${v.timer.paused ? "paused" : ""}">${v.timer.paused ? t(lang, "pausedLabel") : `⏱ ${Math.ceil(v.timer.remainingMs / 1000)}s`}</span>` : "";
+    if (v.phase === "guess" && v.timedOutWaiting) {
       body = `
         <div class="card stack">
           <div class="pair-words">
@@ -1452,10 +1626,24 @@ function renderRound(v) {
             <span class="vs">↔</span>
             <div class="pair-word"><span class="who">${tf(lang, "partnerWordLabel", { partner: esc(v.partner) })}</span>${esc(v.partnerWord)}</div>
           </div>
-          <div class="center"><span class="attempt-pill">${tf(lang, "chanceLabel", { a: v.attempt, lo: v.scoring[v.attempt][0], hi: v.scoring[v.attempt][1] })}</span></div>
           ${hist ? `<div class="stack">${hist}</div>` : ""}
-          <div class="label center">${t(lang, "countdownLabel")}</div>
-          <div class="status-banner waiting-pulse">${t(lang, "hostConfirmLabel")}</div>
+          <div class="match-flash bad">${t(lang, "timedOutFlash")}</div>
+          <div class="status-banner waiting-pulse">${t(lang, "waitingHostResume")}</div>
+        </div>`;
+    } else if (v.phase === "guess" && v.mode === "local") {
+      body = `
+        <div class="card stack">
+          <div class="pair-words">
+            <div class="pair-word"><span class="who">${t(lang, "yourWordLabel")}</span>${esc(v.myWord)}</div>
+            <span class="vs">↔</span>
+            <div class="pair-word"><span class="who">${tf(lang, "partnerWordLabel", { partner: esc(v.partner) })}</span>${esc(v.partnerWord)}</div>
+          </div>
+          <div class="center"><span class="attempt-pill">${tf(lang, "chanceLabel", { a: v.attempt, lo: v.scoring[v.attempt][0], hi: v.scoring[v.attempt][1] })}</span>${timerPill}</div>
+          ${hist ? `<div class="stack">${hist}</div>` : ""}
+          ${v.timer && v.timer.paused
+            ? `<div class="status-banner">${t(lang, "pausedBanner")}</div>`
+            : `<div class="label center">${t(lang, "countdownLabel")}</div>
+               <div class="status-banner waiting-pulse">${t(lang, "hostConfirmLabel")}</div>`}
         </div>`;
     } else if (v.phase === "guess") {
       body = `
@@ -1465,9 +1653,11 @@ function renderRound(v) {
             <span class="vs">↔</span>
             <div class="pair-word"><span class="who">${tf(lang, "partnerWordLabel", { partner: esc(v.partner) })}</span>${esc(v.partnerWord)}</div>
           </div>
-          <div class="center"><span class="attempt-pill">${tf(lang, "chanceLabel", { a: v.attempt, lo: v.scoring[v.attempt][0], hi: v.scoring[v.attempt][1] })}</span></div>
+          <div class="center"><span class="attempt-pill">${tf(lang, "chanceLabel", { a: v.attempt, lo: v.scoring[v.attempt][0], hi: v.scoring[v.attempt][1] })}</span>${timerPill}</div>
           ${hist ? `<div class="stack">${hist}</div>` : ""}
-          ${v.guessed
+          ${v.timer && v.timer.paused
+            ? `<div class="status-banner">${t(lang, "pausedBanner")}</div>`
+            : v.guessed
             ? `<div class="status-banner waiting-pulse">${tf(lang, "waitingForPartner", { partner: esc(v.partner) })}</div>`
             : `<div class="label center">${tf(lang, "typeInBetween", { partner: esc(v.partner) })}</div>
                <input type="text" id="guessInput" placeholder="${esc(t(lang, "guessPlaceholder"))}" autocomplete="off"
@@ -1492,6 +1682,10 @@ function renderRound(v) {
         </div>`;
     }
   }
+  const draftSig = `${v.round}:${v.partner ?? ""}:${v.attempt ?? ""}`;
+  const oldInput = document.getElementById("guessInput");
+  if (oldInput) guessDraft = { sig: lastRenderSig, value: oldInput.value, selStart: oldInput.selectionStart, selEnd: oldInput.selectionEnd };
+  lastRenderSig = draftSig;
   $app.innerHTML = `
     ${header(lang)}
     ${roundHeader(v, lang)}
@@ -1500,7 +1694,16 @@ function renderRound(v) {
     <div class="card"><div class="label">${t(lang, "scoreboardLabel")}</div>${scoreTable(v, false, lang)}</div>
     ${hostControls(v, lang)}`;
   const gi = document.getElementById("guessInput");
-  if (gi) gi.focus();
+  if (gi) {
+    gi.focus();
+    if (guessDraft && guessDraft.sig === draftSig) {
+      gi.value = guessDraft.value;
+      gi.setSelectionRange(guessDraft.selStart, guessDraft.selEnd);
+    } else {
+      guessDraft = null;
+    }
+  }
+  syncCountdown(v);
 }
 
 function renderEnd(v) {
