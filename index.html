@@ -411,6 +411,10 @@ const T = {
     resumeBtn: "▶ Resume",
     addTimeBtn: "+15s",
     continueBtn: "▶ Continue",
+    showLogBtn: "📜 Show match log",
+    hideLogBtn: "📜 Hide match log",
+    logMatchLine: "R{r}: {a} + {b} matched — {a} +{ptsA}, {b} +{ptsB}",
+    logNoMatchLine: "R{r}: {a} + {b} — no match",
   },
   es: {
     tagline: "Piensa en una palabra entre las dos palabras. Conecten mentes, sumen puntos.",
@@ -521,6 +525,10 @@ const T = {
     resumeBtn: "▶ Reanudar",
     addTimeBtn: "+15s",
     continueBtn: "▶ Continuar",
+    showLogBtn: "📜 Mostrar registro",
+    hideLogBtn: "📜 Ocultar registro",
+    logMatchLine: "R{r}: {a} + {b} coincidieron — {a} +{ptsA}, {b} +{ptsB}",
+    logNoMatchLine: "R{r}: {a} + {b} — no coincidió",
   },
 };
 function t(lang, key) {
@@ -623,6 +631,7 @@ const H = {
   kickedPids: new Set(),  // device pids permanently banned from this room (host used Kick) — survives reconnect attempts
   lastResult: null,       // snapshot for undoing the host's last local-mode We-matched/No-match tap
   lastGameRoster: null,   // {name, score, pid}[] from the game that just ended — for score continuity on restart
+  log: [],                // host-only running history of pair outcomes — {round, names:[a,b], match, points:[a,b]|null}
 };
 
 /* ---------------- HELPERS ---------------- */
@@ -716,6 +725,7 @@ function startGame() {
   const matched = matchPreviousRoster(H.players, H.lastGameRoster);
   H.deck = shuffle([...wordsFor(H.lang)]);
   H.discard = [];
+  H.log = [];
   H.players.forEach(p => {
     p.score = matched ? (matched.get(p.id) ?? 0) : 0;
     p.hand = Array.from({length: HAND_SIZE}, drawWord);
@@ -861,7 +871,7 @@ function handleGuessTimeout() {
   H.lastResult = null;
   pair.history.push({ a: pair.guesses[pair.a] ?? null, b: pair.guesses[pair.b] ?? null, match: false, timeout: true });
   pair.guesses = {};
-  if (pair.attempt >= MAX_ATTEMPTS) pair.phase = "done"; // advanceActivePair deferred to actContinue
+  if (pair.attempt >= MAX_ATTEMPTS) { pair.phase = "done"; logPairResult(pair, false); } // advanceActivePair deferred to actContinue
   else pair.attempt++;
   H.timedOutPair = i;
   broadcast();
@@ -885,6 +895,18 @@ function startHeartbeat() {
 
 function pairOf(id) { return H.pairs.find(p => p.a === id || p.b === id); }
 function partnerId(pair, id) { return pair.a === id ? pair.b : pair.a; }
+
+/* Host-only running log of finished pairs — who matched (or didn't) and points added.
+   Only called for real outcomes (match / final no-match / timeout-final), never for
+   host-forced skips, since those aren't a result worth logging. */
+function logPairResult(pair, match) {
+  H.log.push({
+    round: H.roundIndex + 1,
+    names: [hostPlayer(pair.a).name, hostPlayer(pair.b).name],
+    match,
+    points: match ? [pair.pointsBy[pair.a], pair.pointsBy[pair.b]] : null,
+  });
+}
 
 function handlePick(id, word) {
   const pair = pairOf(id);
@@ -924,10 +946,12 @@ function handleGuess(id, word) {
       H.timer = null;
       [pair.a, pair.b].forEach(pid => hostPlayer(pid).score += pair.pointsBy[pid]);
       advanceActivePair();
+      logPairResult(pair, true);
     } else if (pair.attempt >= MAX_ATTEMPTS) {
       pair.phase = "done";
       H.timer = null;
       advanceActivePair();
+      logPairResult(pair, false);
     } else {
       pair.attempt++;
       startGuessTimer(H.pairs.indexOf(pair));
@@ -951,6 +975,7 @@ function hostSetResult(i, match) {
     prevScoreB: hostPlayer(pair.b).score,
     prevActivePair: H.activePair,
     promotedIndex: -1,
+    logLenBefore: H.log.length,
   };
   pair.history.push({ a: null, b: null, match });
   if (match) {
@@ -959,10 +984,12 @@ function hostSetResult(i, match) {
     H.timer = null;
     [pair.a, pair.b].forEach(pid => hostPlayer(pid).score += pair.pointsBy[pid]);
     H.lastResult.promotedIndex = advanceActivePair();
+    logPairResult(pair, true);
   } else if (pair.attempt >= MAX_ATTEMPTS) {
     pair.phase = "done";
     H.timer = null;
     H.lastResult.promotedIndex = advanceActivePair();
+    logPairResult(pair, false);
   } else {
     pair.attempt++;
     startGuessTimer(i);
@@ -976,10 +1003,11 @@ function hostSetResult(i, match) {
 function undoLastResult() {
   if (!H.lastResult) return;
   const { pairIndex, prevAttempt, prevHistory, prevPointsBy,
-          prevScoreA, prevScoreB, prevActivePair, promotedIndex } = H.lastResult;
+          prevScoreA, prevScoreB, prevActivePair, promotedIndex, logLenBefore } = H.lastResult;
   const pair = H.pairs[pairIndex];
   if (!pair) { H.lastResult = null; broadcast(); return; }
   const bothConnected = hostPlayer(pair.a)?.connected && hostPlayer(pair.b)?.connected;
+  H.log.length = logLenBefore;
   pair.attempt = prevAttempt;
   pair.history = prevHistory;
   pair.pointsBy = prevPointsBy;
@@ -1020,6 +1048,7 @@ function viewFor(id) {
     mode: H.mode,
     lang: H.lang,
   };
+  if (id === "me") base.log = H.log; // host-only match log, persists across the whole game
   if (H.stage !== "round" || !me) return base;
 
   base.allDone = H.pairs.every(p => p.phase === "done");
@@ -1457,6 +1486,23 @@ function stopCountdown() {
 let guessDraft = null;    // {sig, value, selStart, selEnd}
 let lastRenderSig = null; // draftSig of the most recent round render
 
+// Host-only match log visibility — purely local UI state (never synced), so it survives
+// across the re-renders broadcast() triggers but resets on page reload.
+let hostLogOpen = false;
+window.actToggleLog = () => { hostLogOpen = !hostLogOpen; render(); };
+
+function hostLogCard(v, lang) {
+  if (!v.isHost || !v.log || !v.log.length) return "";
+  const rows = [...v.log].reverse().map(e => `<div class="small">${e.match
+    ? tf(lang, "logMatchLine", { r: e.round, a: esc(e.names[0]), b: esc(e.names[1]), ptsA: e.points[0], ptsB: e.points[1] })
+    : tf(lang, "logNoMatchLine", { r: e.round, a: esc(e.names[0]), b: esc(e.names[1]) })
+  }</div>`).join("");
+  return `<div class="card stack">
+    <button class="secondary" onclick="actToggleLog()">${t(lang, hostLogOpen ? "hideLogBtn" : "showLogBtn")} (${v.log.length})</button>
+    ${hostLogOpen ? `<div class="stack">${rows}</div>` : ""}
+  </div>`;
+}
+
 function render() {
   const v = myView;
   if (!v) return;
@@ -1692,6 +1738,7 @@ function renderRound(v) {
     ${body}
     ${pairsStatus(v, lang)}
     <div class="card"><div class="label">${t(lang, "scoreboardLabel")}</div>${scoreTable(v, false, lang)}</div>
+    ${hostLogCard(v, lang)}
     ${hostControls(v, lang)}`;
   const gi = document.getElementById("guessInput");
   if (gi) {
@@ -1711,6 +1758,7 @@ function renderEnd(v) {
   $app.innerHTML = `
     ${header(lang)}
     <div class="card center"><div class="match-flash good">${t(lang, "finalScoresTitle")}</div>${scoreTable(v, true, lang)}</div>
+    ${hostLogCard(v, lang)}
     ${v.isHost ? `
       <div class="stack">
         <button onclick="actBackToLobby()">${t(lang, "backToLobbyBtn")}</button>
