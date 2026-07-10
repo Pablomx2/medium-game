@@ -1280,13 +1280,23 @@ function stopCountdown() {
   if (countdownInterval) { clearInterval(countdownInterval); countdownInterval = null; }
 }
 
+// The guess input's value lives only in the DOM, and every broadcast (partner locking in,
+// timer pause/resume, a disconnect elsewhere) replaces $app.innerHTML — save the draft
+// before each re-render and restore it after, but only within the same chance: the
+// signature (round + partner + attempt) changes whenever a fresh chance should start empty.
+// The draft is stamped with the sig of the render that created the input (lastRenderSig),
+// not the incoming one — otherwise a just-submitted word still sitting in the old DOM when
+// a failed chance re-renders would leak into the next chance's empty input.
+let guessDraft = null;    // {sig, value, selStart, selEnd}
+let lastRenderSig = null; // draftSig of the most recent round render
+
 function render() {
   const v = myView;
   if (!v) return;
   document.documentElement.lang = v.lang || uiLang;
-  if (v.stage === "lobby") { stopCountdown(); return renderLobby(v); }
+  if (v.stage === "lobby") { stopCountdown(); guessDraft = null; return renderLobby(v); }
   if (v.stage === "round") return renderRound(v);
-  if (v.stage === "end") { stopCountdown(); return renderEnd(v); }
+  if (v.stage === "end") { stopCountdown(); guessDraft = null; return renderEnd(v); }
 }
 
 function renderLobby(v) {
@@ -1501,6 +1511,10 @@ function renderRound(v) {
         </div>`;
     }
   }
+  const draftSig = `${v.round}:${v.partner ?? ""}:${v.attempt ?? ""}`;
+  const oldInput = document.getElementById("guessInput");
+  if (oldInput) guessDraft = { sig: lastRenderSig, value: oldInput.value, selStart: oldInput.selectionStart, selEnd: oldInput.selectionEnd };
+  lastRenderSig = draftSig;
   $app.innerHTML = `
     ${header(lang)}
     ${roundHeader(v, lang)}
@@ -1509,7 +1523,15 @@ function renderRound(v) {
     <div class="card"><div class="label">${t(lang, "scoreboardLabel")}</div>${scoreTable(v, false, lang)}</div>
     ${hostControls(v, lang)}`;
   const gi = document.getElementById("guessInput");
-  if (gi) gi.focus();
+  if (gi) {
+    gi.focus();
+    if (guessDraft && guessDraft.sig === draftSig) {
+      gi.value = guessDraft.value;
+      gi.setSelectionRange(guessDraft.selStart, guessDraft.selEnd);
+    } else {
+      guessDraft = null;
+    }
+  }
   syncCountdown(v);
 }
 
