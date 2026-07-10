@@ -314,6 +314,7 @@ const T = {
     gameAlreadyStarted: "Game already started",
     roomFull: "This room is full (20 players max).",
     lostConnection: "Lost connection to host.",
+    reconnecting: "Reconnecting…",
     removedByHost: "The host removed you from the room.",
     skippedStatus: "✗ disconnected",
     roundSkippedFlash: "😴 Round skipped — a player disconnected",
@@ -401,6 +402,7 @@ const T = {
     gameAlreadyStarted: "La partida ya comenzó",
     roomFull: "Esta sala está llena (máximo 20 jugadores).",
     lostConnection: "Se perdió la conexión con el anfitrión.",
+    reconnecting: "Reconectando…",
     removedByHost: "El anfitrión te eliminó de la sala.",
     skippedStatus: "✗ desconexión",
     roundSkippedFlash: "😴 Ronda omitida — un jugador se desconectó",
@@ -486,6 +488,15 @@ const MAX_ATTEMPTS = 3;
 const HAND_SIZE = 3;
 const MAX_PLAYERS = 20;
 const PEER_PREFIX = "medium-mindmeld-";
+const GUEST_RECONNECT_DELAY = 1500;
+const GUEST_RECONNECT_MAX_TRIES = 6; // while the tab is actively visible
+const ICE_SERVERS = {
+  iceServers: [
+    { urls: "stun:stun.l.google.com:19302" },
+    { urls: "turn:global.relay.metered.ca:80", username: "openrelayproject", credential: "openrelayproject" },
+    { urls: "turn:global.relay.metered.ca:443", username: "openrelayproject", credential: "openrelayproject" },
+  ],
+};
 
 const $app = document.getElementById("app");
 const norm = s => (s || "").trim().toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "");
@@ -512,6 +523,7 @@ const H = {
   roundIndex: -1,
   pairs: [],              // per current round: {a, b, phase, picks:{}, guesses:{}, attempt, history:[], pointsBy}
   byeId: null,
+  connMap: {},            // live PeerJS conn.peer id → stable logical player id (survives reconnects)
 };
 
 /* ---------------- HELPERS ---------------- */
@@ -736,7 +748,7 @@ function setupHost(name) {
   role = "host"; myName = name; myId = "me";
   const code = roomCode();
   renderConnecting(t(uiLang, "creatingRoom"));
-  peer = new Peer(PEER_PREFIX + code);
+  peer = new Peer(PEER_PREFIX + code, { config: ICE_SERVERS });
   peer.on("open", () => {
     H.players = [{ id: "me", name, conn: null, score: 0, hand: [], connected: true }];
     H.stage = "lobby";
@@ -748,51 +760,95 @@ function setupHost(name) {
     conn.on("data", msg => {
       if (msg.t === "join") {
         if (H.stage !== "lobby") {
-          // allow reconnect by name mid-game
+          // allow reconnect by name mid-game — keep the player's logical id stable,
+          // just repoint the live connection so H.pairs/H.schedule references stay valid
           const existing = H.players.find(p => p.name === msg.name && !p.connected);
-          if (existing) { existing.conn = conn; existing.id = conn.peer; existing.connected = true; broadcast(); return; }
+          if (existing) {
+            existing.conn = conn;
+            existing.connected = true;
+            H.connMap[conn.peer] = existing.id;
+            broadcast();
+            return;
+          }
           conn.send({ t: "reject", reason: "started" }); return;
         }
         if (H.players.length >= MAX_PLAYERS) { conn.send({ t: "reject", reason: "full" }); return; }
         let nm = msg.name.trim().slice(0, 16) || "Player";
         while (H.players.some(p => p.name === nm)) nm += "'";
         H.players.push({ id: conn.peer, name: nm, conn, score: 0, hand: [], connected: true });
+        H.connMap[conn.peer] = conn.peer;
         conn.send({ t: "welcome", name: nm });
         broadcast();
       } else {
-        hostMsg(conn.peer, msg);
+        const pid = H.connMap[conn.peer];
+        if (pid) hostMsg(pid, msg);
       }
     });
-    conn.on("close", () => dropPlayer(conn.peer));
+    conn.on("close", () => {
+      const pid = H.connMap[conn.peer];
+      if (pid) dropPlayer(pid);
+    });
   });
   peer.on("error", err => {
+    console.warn("host peer error", err.type, err.message);
     if (err.type === "unavailable-id") setupHost(name); // code collision → retry
-    else renderError(tf(uiLang, "connectionError", { type: err.type }));
+    else renderError(tf(uiLang, "connectionError", { type: err.message ? `${err.type}: ${err.message}` : err.type }));
   });
 }
 
 /* ---------------- GUEST LOGIC ---------------- */
+let guestReconnectAttempts = 0;
+let guestReconnectTimer = null;
+let guestListenerAttached = false;
+
 function setupGuest(name, code) {
   role = "guest"; myName = name;
+  guestReconnectAttempts = 0;
   renderConnecting(tf(uiLang, "joiningRoom", { code }));
-  peer = new Peer();
+  connectToHost(name, code);
+  if (!guestListenerAttached) {
+    guestListenerAttached = true;
+    document.addEventListener("visibilitychange", () => {
+      if (!document.hidden && role === "guest" && (!hostConn || !hostConn.open) && !guestReconnectTimer) {
+        guestReconnectAttempts = 0;
+        attemptReconnect(name, code);
+      }
+    });
+  }
+}
+
+function connectToHost(name, code) {
+  peer = new Peer({ config: ICE_SERVERS });
   peer.on("open", () => {
+    guestReconnectAttempts = 0;
     hostConn = peer.connect(PEER_PREFIX + code.toUpperCase(), { reliable: true });
-    let ended = false;
-    const guestEnd = msg => { if (ended) return; ended = true; renderError(msg); };
     hostConn.on("open", () => hostConn.send({ t: "join", name }));
     hostConn.on("data", msg => {
       if (msg.t === "view") { myView = msg.view; render(); }
       else if (msg.t === "welcome") { myName = msg.name; }
-      else if (msg.t === "removed") { guestEnd(t(curLang(), "removedByHost")); }
-      else if (msg.t === "reject") { guestEnd(t(uiLang, msg.reason === "full" ? "roomFull" : "gameAlreadyStarted")); }
+      else if (msg.t === "removed") { renderError(t(curLang(), "removedByHost")); }
+      else if (msg.t === "reject") { renderError(t(uiLang, msg.reason === "full" ? "roomFull" : "gameAlreadyStarted")); }
     });
-    hostConn.on("close", () => guestEnd(t(curLang(), "lostConnection")));
+    hostConn.on("close", () => attemptReconnect(name, code));
   });
   peer.on("error", err => {
+    console.warn("guest peer error", err.type, err.message);
     if (err.type === "peer-unavailable") renderError(tf(uiLang, "roomNotFound", { code: code.toUpperCase() }));
-    else renderError(tf(uiLang, "connectionError", { type: err.type }));
+    else attemptReconnect(name, code);
   });
+}
+
+function attemptReconnect(name, code) {
+  if (guestReconnectTimer) return;
+  if (document.hidden) return; // wait for visibilitychange to kick a fresh attempt
+  guestReconnectAttempts++;
+  if (guestReconnectAttempts > GUEST_RECONNECT_MAX_TRIES) { renderError(t(curLang(), "lostConnection")); return; }
+  renderConnecting(t(curLang(), "reconnecting"));
+  guestReconnectTimer = setTimeout(() => {
+    guestReconnectTimer = null;
+    try { peer && peer.destroy(); } catch (e) {}
+    connectToHost(name, code);
+  }, GUEST_RECONNECT_DELAY);
 }
 
 function send(msg) {
