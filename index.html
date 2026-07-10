@@ -175,6 +175,8 @@
   .pairs-list .pr .st { color: var(--muted); }
   .pairs-list .pr .st.done { color: var(--good); }
   .pairs-list .pr .st.fail { color: var(--bad); }
+  .pairs-list .pr-active { border: 1px solid var(--accent); }
+  .pr-active-tag { color: var(--accent); font-weight: 700; }
 </style>
 </head>
 <body>
@@ -320,13 +322,15 @@ const T = {
     connectionError: "Connection error: {type}",
     gameAlreadyStarted: "Game already started",
     roomFull: "This room is full (20 players max).",
-    lostConnection: "Lost connection to host.",
+    lostConnection: "Couldn't establish a connection to the host. If you're on a VPN, try turning it off or switching servers — VPNs often block the direct peer-to-peer connection this game needs.",
     reconnecting: "Reconnecting…",
     removedByHost: "The host removed you from the room.",
     skippedStatus: "✗ disconnected",
     roundSkippedFlash: "😴 Round skipped — a player disconnected",
     stillChoosingHost: "Still choosing words…",
     skipPairBtn: "Skip (disconnected)",
+    undoResultBtn: "↩️ Undo last result",
+    noActivePairs: "No active pairs right now.",
     backBtn: "Back",
     roomCodeLabel: "Room code — share with everyone",
     roomCodeHint: "They open this same website and tap Join",
@@ -378,6 +382,7 @@ const T = {
     noMatchFlash: "😵 No match this time",
     waitingNextRound: "Waiting for other pairs / next round…",
     thisRoundLabel: "This round",
+    thisRoundCountLabel: "This round ({done}/{total} done)",
     playingStatus: "playing…",
     noMatchStatus: "✗ no match",
     scoreboardLabel: "Scoreboard",
@@ -427,13 +432,15 @@ const T = {
     connectionError: "Error de conexión: {type}",
     gameAlreadyStarted: "La partida ya comenzó",
     roomFull: "Esta sala está llena (máximo 20 jugadores).",
-    lostConnection: "Se perdió la conexión con el anfitrión.",
+    lostConnection: "No se pudo establecer conexión con el anfitrión. Si usas VPN, prueba desactivarla o cambiar de servidor — las VPN suelen bloquear la conexión directa de igual a igual que necesita este juego.",
     reconnecting: "Reconectando…",
     removedByHost: "El anfitrión te eliminó de la sala.",
     skippedStatus: "✗ desconexión",
     roundSkippedFlash: "😴 Ronda omitida — un jugador se desconectó",
     stillChoosingHost: "Todavía eligiendo palabras…",
     skipPairBtn: "Omitir (desconectado)",
+    undoResultBtn: "↩️ Deshacer último resultado",
+    noActivePairs: "No hay parejas activas ahora mismo.",
     backBtn: "Atrás",
     roomCodeLabel: "Código de la sala — compártelo con todos",
     roomCodeHint: "Ellos abren este mismo sitio y tocan Unirse",
@@ -485,6 +492,7 @@ const T = {
     noMatchFlash: "😵 Esta vez no coincidieron",
     waitingNextRound: "Esperando a las demás parejas / siguiente ronda…",
     thisRoundLabel: "Esta ronda",
+    thisRoundCountLabel: "Esta ronda ({done}/{total} lista)",
     playingStatus: "jugando…",
     noMatchStatus: "✗ sin coincidencia",
     scoreboardLabel: "Marcador",
@@ -540,11 +548,19 @@ const GUEST_RECONNECT_DELAY = 1500;
 const GUEST_RECONNECT_MAX_TRIES = 6; // while the tab is actively visible
 const HEARTBEAT_INTERVAL = 4000;
 const HEARTBEAT_TIMEOUT = 13000; // no pong/message in this long → treat as dead, even without a "close" event
+const JOIN_TIMEOUT = 12000; // P2P handshake succeeded at signaling but never opened — common behind VPNs/restrictive
+                            // firewalls that block plain UDP; without this we'd just hang on "Joining room…" forever
 const ICE_SERVERS = {
   iceServers: [
     { urls: "stun:stun.l.google.com:19302" },
+    // Plain UDP TURN — works for most NATs, including many VPN exit nodes with symmetric/CGNAT.
     { urls: "turn:global.relay.metered.ca:80", username: "openrelayproject", credential: "openrelayproject" },
     { urls: "turn:global.relay.metered.ca:443", username: "openrelayproject", credential: "openrelayproject" },
+    // TURN-over-TCP and TURNS (TLS on 443) — survive VPNs/firewalls that block UDP outright or only
+    // allow standard HTTPS-looking traffic out. This is the path that actually fixes most VPN failures.
+    { urls: "turn:global.relay.metered.ca:80?transport=tcp", username: "openrelayproject", credential: "openrelayproject" },
+    { urls: "turn:global.relay.metered.ca:443?transport=tcp", username: "openrelayproject", credential: "openrelayproject" },
+    { urls: "turns:global.relay.metered.ca:443?transport=tcp", username: "openrelayproject", credential: "openrelayproject" },
   ],
 };
 
@@ -604,6 +620,9 @@ const H = {
   timer: null,            // null | {pairIndex, deadline, remainingMs, paused} — 45s guess-phase countdown
   timedOutPair: null,     // null | pairIndex — set after a timeout forces a no-match; freezes the game
                           // until the host taps Continue (index can be 0 — always compare with !== null)
+  kickedPids: new Set(),  // device pids permanently banned from this room (host used Kick) — survives reconnect attempts
+  lastResult: null,       // snapshot for undoing the host's last local-mode We-matched/No-match tap
+  lastGameRoster: null,   // {name, score, pid}[] from the game that just ended — for score continuity on restart
 };
 
 /* ---------------- HELPERS ---------------- */
@@ -646,25 +665,82 @@ function buildSchedule(ids) {
 /* ---------------- HOST LOGIC ---------------- */
 function hostPlayer(id) { return H.players.find(p => p.id === id); }
 
+/* Classic edit-distance, used only to tolerate small typos in restart-roster name matching. */
+function levenshtein(a, b) {
+  const m = a.length, n = b.length;
+  const dp = Array.from({ length: m + 1 }, (_, i) => [i, ...Array(n).fill(0)]);
+  for (let j = 0; j <= n; j++) dp[0][j] = j;
+  for (let i = 1; i <= m; i++) {
+    for (let j = 1; j <= n; j++) {
+      dp[i][j] = a[i - 1] === b[j - 1] ? dp[i - 1][j - 1]
+        : 1 + Math.min(dp[i - 1][j], dp[i][j - 1], dp[i - 1][j - 1]);
+    }
+  }
+  return dp[m][n];
+}
+/* Short names (<=3 chars) require an exact match — a flat edit-distance-1 threshold would wrongly
+   merge distinct short names like "Sam"/"Pam". Longer names tolerate a single-character typo. */
+function fuzzySame(a, b) {
+  if (a === b) return true;
+  if (Math.min(a.length, b.length) <= 3) return false;
+  return levenshtein(a, b) <= 1;
+}
+
+/* Decide whether a new lobby roster is "the same group" as the game that just ended, for score
+   continuity on restart. Matches by device pid first (most reliable), then fuzzy name as a fallback.
+   Any size mismatch or ambiguous fuzzy tie bails to null, meaning "treat as a different group". */
+function matchPreviousRoster(currentPlayers, prevRoster) {
+  if (!prevRoster || prevRoster.length !== currentPlayers.length) return null;
+  const remaining = [...prevRoster];
+  const result = new Map();
+  for (const p of currentPlayers) {
+    const na = norm(p.name);
+    let idx = remaining.findIndex(r => r.pid && p.pid && r.pid === p.pid);
+    if (idx === -1) {
+      const candidates = remaining
+        .map((r, i) => ({ i, d: fuzzySame(na, norm(r.name)) ? (na === norm(r.name) ? 0 : 1) : Infinity }))
+        .filter(c => c.d !== Infinity)
+        .sort((a, b) => a.d - b.d);
+      if (candidates.length === 0) return null;
+      if (candidates.length > 1 && candidates[0].d === candidates[1].d) return null; // ambiguous → refuse to guess
+      idx = candidates[0].i;
+    }
+    result.set(p.id, remaining[idx].score);
+    remaining.splice(idx, 1);
+  }
+  return result;
+}
+
 function startGame() {
   if (H.players.length < 2) return;
+  const matched = matchPreviousRoster(H.players, H.lastGameRoster);
   H.deck = shuffle([...wordsFor(H.lang)]);
   H.discard = [];
-  H.players.forEach(p => { p.score = 0; p.hand = Array.from({length: HAND_SIZE}, drawWord); });
+  H.players.forEach(p => {
+    p.score = matched ? (matched.get(p.id) ?? 0) : 0;
+    p.hand = Array.from({length: HAND_SIZE}, drawWord);
+  });
   H.schedule = buildSchedule(H.players.map(p => p.id));
   H.roundIndex = -1;
   nextRound();
 }
 
+/* Snapshot the roster+scores of the game that just ended, so a restart can decide whether to carry
+   scores forward (same group, via matchPreviousRoster) or reset (different group). */
+function captureLastGameRoster() {
+  H.lastGameRoster = H.players.map(p => ({ name: p.name, score: p.score, pid: p.pid }));
+}
+
 function nextRound() {
   clearTimerState();
   H.roundIndex++;
-  if (H.roundIndex >= H.schedule.length) { H.stage = "end"; broadcast(); return; }
+  if (H.roundIndex >= H.schedule.length) { H.stage = "end"; H.lastResult = null; captureLastGameRoster(); broadcast(); return; }
   H.stage = "round";
+  H.lastResult = null;
   const connected = new Set(H.players.filter(p => p.connected).map(p => p.id));
   const pairIds = H.schedule[H.roundIndex].filter(([a, b]) => connected.has(a) && connected.has(b));
   const inRound = new Set(pairIds.flat());
-  H.byeId = H.players.map(p => p.id).find(id => !inRound.has(id)) ?? null;
+  H.byeId = H.players.filter(p => p.connected).map(p => p.id).find(id => !inRound.has(id)) ?? null;
   // Turn order within the round is randomized — nobody (host included) picks who goes first.
   // Only one pair is "pick"-able at a time; the rest sit at "waiting" (grayed out, partner hidden)
   // until advanceActivePair() promotes them.
@@ -677,10 +753,18 @@ function nextRound() {
 }
 
 /* Promote the next waiting pair to "pick" once the current one finishes — rounds still only
-   advance via the host's existing Next Round control, but pairs within a round flow automatically. */
+   advance via the host's existing Next Round control, but pairs within a round flow automatically.
+   Returns the promoted index (or -1), used by hostSetResult()'s undo snapshot. */
 function advanceActivePair() {
   const next = H.pairs.findIndex(p => p.phase === "waiting");
   if (next !== -1) { H.activePair = next; H.pairs[next].phase = "pick"; }
+  return next;
+}
+
+/* Any pair's state changing except the one a pending undo snapshot refers to invalidates that
+   snapshot — this keeps undo's assumption ("nothing else moved since") always true. */
+function invalidateUndo(pairIndex) {
+  if (H.lastResult && H.lastResult.pairIndex !== pairIndex) H.lastResult = null;
 }
 
 /* Shared drop path: PeerJS close event + heartbeat health check both land here.
@@ -702,9 +786,38 @@ function skipPair(i) {
   if (hostPlayer(pair.a)?.connected && hostPlayer(pair.b)?.connected) return; // only for stuck/disconnected pairs
   if (H.timer && H.timer.pairIndex === i) H.timer = null;
   if (H.timedOutPair === i) H.timedOutPair = null;
+  invalidateUndo(i);
   pair.phase = "done";
   pair.skipped = true;
   advanceActivePair();
+  broadcast();
+}
+
+/* Host-only, any stage: permanently remove a player from this room. Kicking mid-round resolves
+   their current pair (like a disconnect) so the round isn't stuck; kicking never lets that device
+   back in, even via the pid-based reconnect path (see the join handler below). */
+function kickPlayer(id) {
+  const p = H.players.find(p => p.id === id);
+  if (!p || p.id === "me") return;
+  if (p.pid) H.kickedPids.add(p.pid);
+  if (p.conn) {
+    try { p.conn.send({ t: "removed" }); } catch (e) {}
+    setTimeout(() => { try { p.conn.close(); } catch (e) {} }, 500); // let the message flush first
+  }
+  p.connected = false;
+  if (H.stage === "round") {
+    const pair = pairOf(id);
+    if (pair && pair.phase !== "done") {
+      const pairIndex = H.pairs.indexOf(pair);
+      if (H.timer && H.timer.pairIndex === pairIndex) H.timer = null;
+      if (H.timedOutPair === pairIndex) H.timedOutPair = null;
+      invalidateUndo(pairIndex);
+      pair.phase = "done";
+      pair.skipped = true;
+      if (H.pairs[H.activePair] === pair) advanceActivePair();
+    }
+  }
+  if (H.stage === "lobby") H.players = H.players.filter(x => x !== p);
   broadcast();
 }
 
@@ -742,6 +855,10 @@ function handleGuessTimeout() {
   H.timer = null; // null out before the stale-phase check so a queued timeout can never re-fire
   const pair = H.pairs[i];
   if (!pair || pair.phase !== "guess") return;
+  // A timeout is a definitive, non-reversible transition — unlike invalidateUndo()'s "only clear
+  // if a *different* pair moved" rule (meant for concurrent pairs), a pending undo snapshot for
+  // THIS pair must not survive its own timeout, since Undo has no way to also un-freeze it.
+  H.lastResult = null;
   pair.history.push({ a: pair.guesses[pair.a] ?? null, b: pair.guesses[pair.b] ?? null, match: false, timeout: true });
   pair.guesses = {};
   if (pair.attempt >= MAX_ATTEMPTS) pair.phase = "done"; // advanceActivePair deferred to actContinue
@@ -794,6 +911,7 @@ function handleGuess(id, word) {
   const pair = pairOf(id);
   if (isGameFrozen() || !pair || pair.phase !== "guess" || pair.guesses[id] !== undefined) return;
   if (!norm(word)) return;
+  invalidateUndo(H.pairs.indexOf(pair));
   pair.guesses[id] = word.trim();
   if (pair.guesses[pair.a] !== undefined && pair.guesses[pair.b] !== undefined) {
     const ga = pair.guesses[pair.a], gb = pair.guesses[pair.b];
@@ -818,25 +936,68 @@ function handleGuess(id, word) {
   broadcast();
 }
 
-/* Local mode: pair said their words out loud — only the host reports the result (by pair index) */
+/* Local mode: pair said their words out loud — only the host reports the result (by pair index).
+   This is a manual human tap, so it's the one action worth letting the host undo (see actUndoResult). */
 function hostSetResult(i, match) {
   const pair = H.pairs[i];
   if (isGameFrozen() || H.mode !== "local" || !pair || pair.phase !== "guess") return;
+  invalidateUndo(i);
+  H.lastResult = {
+    pairIndex: i,
+    prevAttempt: pair.attempt,
+    prevHistory: [...pair.history],
+    prevPointsBy: pair.pointsBy,
+    prevScoreA: hostPlayer(pair.a).score,
+    prevScoreB: hostPlayer(pair.b).score,
+    prevActivePair: H.activePair,
+    promotedIndex: -1,
+  };
   pair.history.push({ a: null, b: null, match });
   if (match) {
     pair.pointsBy = { [pair.a]: rollPoints(pair.attempt), [pair.b]: rollPoints(pair.attempt) };
     pair.phase = "done";
     H.timer = null;
     [pair.a, pair.b].forEach(pid => hostPlayer(pid).score += pair.pointsBy[pid]);
-    advanceActivePair();
+    H.lastResult.promotedIndex = advanceActivePair();
   } else if (pair.attempt >= MAX_ATTEMPTS) {
     pair.phase = "done";
     H.timer = null;
-    advanceActivePair();
+    H.lastResult.promotedIndex = advanceActivePair();
   } else {
     pair.attempt++;
     startGuessTimer(i);
   }
+  broadcast();
+}
+
+/* Host-only: undo the last hostSetResult() tap. Only possible while nothing else has moved since
+   (invalidateUndo() clears H.lastResult the instant any other pair changes), which guarantees any
+   pair this call promoted is still untouched and safe to demote back to "waiting". */
+function undoLastResult() {
+  if (!H.lastResult) return;
+  const { pairIndex, prevAttempt, prevHistory, prevPointsBy,
+          prevScoreA, prevScoreB, prevActivePair, promotedIndex } = H.lastResult;
+  const pair = H.pairs[pairIndex];
+  if (!pair) { H.lastResult = null; broadcast(); return; }
+  const bothConnected = hostPlayer(pair.a)?.connected && hostPlayer(pair.b)?.connected;
+  pair.attempt = prevAttempt;
+  pair.history = prevHistory;
+  pair.pointsBy = prevPointsBy;
+  hostPlayer(pair.a).score = prevScoreA;
+  hostPlayer(pair.b).score = prevScoreB;
+  if (bothConnected) {
+    pair.phase = "guess";
+    startGuessTimer(pairIndex);
+    if (promotedIndex !== -1) H.pairs[promotedIndex].phase = "waiting";
+    H.activePair = prevActivePair;
+  } else {
+    // a member left since the mistaken tap — can't resume their turn, just fix the score
+    pair.phase = "done";
+    pair.skipped = true;
+    if (promotedIndex !== -1) H.activePair = promotedIndex;
+    else advanceActivePair();
+  }
+  H.lastResult = null;
   broadcast();
 }
 
@@ -852,7 +1013,7 @@ function viewFor(id) {
     stage: H.stage,
     myName: me?.name || "",
     isHost: id === "me",
-    players: H.players.map(p => ({ name: p.name, score: p.score, connected: p.connected, me: p.id === id })),
+    players: H.players.map(p => ({ id: p.id, name: p.name, score: p.score, connected: p.connected, me: p.id === id })),
     round: H.roundIndex + 1,
     totalRounds: H.schedule.length,
     scoring: POINT_RANGES,
@@ -870,6 +1031,7 @@ function viewFor(id) {
       const row = {
         names: [hostPlayer(p.a).name, hostPlayer(p.b).name],
         done: p.phase === "done",
+        active: p.phase === "pick",
         waiting: p.phase === "waiting",
         skipped: !!p.skipped,
         points: p.pointsBy ? [p.pointsBy[p.a], p.pointsBy[p.b]] : null,
@@ -884,6 +1046,8 @@ function viewFor(id) {
       }
       return row;
     });
+    base.pairsDoneCount = base.pairsStatus.filter(p => p.done).length;
+    base.canUndo = !!H.lastResult;
   }
 
   const pair = pairOf(id);
@@ -965,6 +1129,9 @@ function setupHost(name) {
         return;
       }
       if (msg.t === "join") {
+        // A kicked device is permanently banned from this room — checked before both the
+        // mid-game reconnect path and the fresh-lobby-join path below.
+        if (msg.pid && H.kickedPids.has(msg.pid)) { conn.send({ t: "reject", reason: "kicked" }); return; }
         if (H.stage !== "lobby") {
           // allow reconnect mid-game — matched by persistent device id (not name +
           // "currently marked disconnected") so a fast reconnect that beats the heartbeat
@@ -1045,14 +1212,22 @@ function connectToHost(name, code) {
   peer.on("open", () => {
     guestReconnectAttempts = 0;
     hostConn = peer.connect(PEER_PREFIX + code.toUpperCase(), { reliable: true });
-    hostConn.on("open", () => { lastHostMsgAt = Date.now(); hostConn.send({ t: "join", name, pid: getDeviceId() }); });
+    // Signaling can succeed (PeerJS finds the host) while ICE negotiation itself never completes —
+    // no "error" or "close" event fires for that, it just hangs. VPNs/restrictive firewalls that
+    // block plain UDP are the most common cause. Treat a stuck handshake as a failed attempt.
+    const joinTimer = setTimeout(() => {
+      if (!hostConn || !hostConn.open) { console.warn("guest join timed out before P2P connection opened"); attemptReconnect(name, code); }
+    }, JOIN_TIMEOUT);
+    hostConn.on("open", () => { clearTimeout(joinTimer); lastHostMsgAt = Date.now(); hostConn.send({ t: "join", name, pid: getDeviceId() }); });
     hostConn.on("data", msg => {
       lastHostMsgAt = Date.now();
       if (msg.t === "ping") { try { hostConn.send({ t: "pong" }); } catch (e) {} }
       else if (msg.t === "view") { myView = msg.view; render(); }
       else if (msg.t === "welcome") { myName = msg.name; }
       else if (msg.t === "removed") { renderError(t(curLang(), "removedByHost")); }
-      else if (msg.t === "reject") { renderError(t(uiLang, msg.reason === "full" ? "roomFull" : "gameAlreadyStarted")); }
+      else if (msg.t === "reject") {
+        renderError(t(uiLang, msg.reason === "full" ? "roomFull" : msg.reason === "kicked" ? "removedByHost" : "gameAlreadyStarted"));
+      }
     });
     hostConn.on("close", () => attemptReconnect(name, code));
   });
@@ -1097,7 +1272,7 @@ window.actLang = lang => {
 };
 window.actStart = () => { if (role === "host") startGame(); };
 window.actNext = () => { if (role === "host") nextRound(); };
-window.actEnd = () => { if (role === "host") { clearTimerState(); H.stage = "end"; broadcast(); } };
+window.actEnd = () => { if (role === "host") { clearTimerState(); H.stage = "end"; H.lastResult = null; captureLastGameRoster(); broadcast(); } };
 window.actBackToLobby = () => {
   if (role !== "host") return;
   clearTimerState();
@@ -1126,17 +1301,8 @@ window.actContinue = () => {
   else advanceActivePair();                                 // was the 3rd-chance timeout — promote next pair
   broadcast();
 };
-window.actKick = i => {
-  if (role !== "host" || H.stage !== "lobby") return;
-  const p = H.players[i];
-  if (!p || p.id === "me") return;
-  if (p.conn) {
-    try { p.conn.send({ t: "removed" }); } catch (e) {}
-    setTimeout(() => { try { p.conn.close(); } catch (e) {} }, 500); // let the message flush first
-  }
-  H.players = H.players.filter(x => x !== p);
-  broadcast();
-};
+window.actKick = id => { if (role === "host") kickPlayer(id); };
+window.actUndoResult = () => { if (role === "host") undoLastResult(); };
 
 /* ---------------- RENDERING ---------------- */
 function esc(s) { return String(s).replace(/[&<>"']/g, c => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;" }[c])); }
@@ -1250,9 +1416,10 @@ function renderError(msg) {
 }
 
 function scoreTable(v, final, lang) {
+  const canKick = !final && v.isHost && v.stage === "round";
   const rows = [...v.players].sort((a, b) => b.score - a.score).map((p, i) => `
     <tr class="${p.me ? "me" : ""}">
-      <td>${final && i === 0 ? "👑 " : ""}${esc(p.name)}${p.me ? t(lang, "youSuffix") : ""}${p.connected === false ? " ⚠️" : ""}</td>
+      <td>${final && i === 0 ? "👑 " : ""}${esc(p.name)}${p.me ? t(lang, "youSuffix") : ""}${p.connected === false ? " ⚠️" : ""}${canKick && !p.me ? `<button class="chip-x" onclick="actKick('${esc(p.id)}')">✕</button>` : ""}</td>
       <td class="pts">${p.score}</td>
     </tr>`).join("");
   return `<table class="score"><tr><th>${t(lang, "playerCol")}</th><th style="text-align:right">${t(lang, "pointsCol")}</th></tr>${rows}</table>`;
@@ -1301,8 +1468,8 @@ function render() {
 
 function renderLobby(v) {
   const lang = v.lang || uiLang;
-  const chips = v.players.map((p, i) =>
-    `<span class="player-chip"><span class="dot ${p.connected === false ? "off" : ""}"></span>${esc(p.name)}${p.me ? t(lang, "youSuffix") : ""}${v.isHost && !p.me ? `<button class="chip-x" onclick="actKick(${i})">✕</button>` : ""}</span>`).join("");
+  const chips = v.players.map(p =>
+    `<span class="player-chip"><span class="dot ${p.connected === false ? "off" : ""}"></span>${esc(p.name)}${p.me ? t(lang, "youSuffix") : ""}${v.isHost && !p.me ? `<button class="chip-x" onclick="actKick('${esc(p.id)}')">✕</button>` : ""}</span>`).join("");
   $app.innerHTML = `
     ${header(lang)}
     ${v.isHost ? `
@@ -1351,6 +1518,7 @@ function roundHeader(v, lang) {
 function hostControls(v, lang) {
   if (!v.isHost) return "";
   return `<div class="stack">
+    ${v.canUndo ? `<button class="secondary" onclick="actUndoResult()">${t(lang, "undoResultBtn")}</button>` : ""}
     <button onclick="actNext()" ${v.allDone ? "" : "disabled"}>
       ${v.round >= v.totalRounds ? t(lang, "finishGameBtn") : t(lang, "nextRoundBtn")}${v.allDone ? "" : t(lang, "waitingForPairsSuffix")}</button>
     <button class="secondary" onclick="actEnd()">${t(lang, "endGameBtn")}</button>
@@ -1360,6 +1528,9 @@ function hostControls(v, lang) {
 function pairsStatus(v, lang) {
   // Host-only: players never see the pairing/turn overview, so this simply renders nothing for them.
   if (!v.pairsStatus) return "";
+  if (v.pairsStatus.length === 0) {
+    return `<div class="card"><div class="label">${t(lang, "thisRoundLabel")}</div><div class="small">${t(lang, "noActivePairs")}</div></div>`;
+  }
   const rows = v.pairsStatus.map((p, i) => {
     const label = `<span>${esc(p.names[0])} + ${esc(p.names[1])}${p.disconnected && !p.done ? ` <span class="small">(${t(lang, "skippedStatus")})</span>` : ""}</span>
       <span class="st ${p.done ? (p.points ? "done" : "fail") : ""}">${p.done ? (p.points ? "✓ +" + p.points.join(" / +") + " pts" : t(lang, p.skipped ? "skippedStatus" : "noMatchStatus")) : t(lang, p.waiting ? "waitingTurnStatus" : "playingStatus")}</span>`;
@@ -1391,8 +1562,8 @@ function pairsStatus(v, lang) {
           <button class="secondary" onclick="actHostResult(${i}, false)">${t(lang, "noMatchBtn")}</button>
         </div>` : "";
     const skipButton = p.disconnected ? `<button class="secondary" onclick="actSkipPair(${i})">${t(lang, "skipPairBtn")}</button>` : "";
-    return `<div class="pr" style="flex-direction:column; align-items:stretch; gap:6px">
-      <div style="display:flex; justify-content:space-between">${label}</div>
+    return `<div class="pr ${p.active ? "pr-active" : ""}" style="flex-direction:column; align-items:stretch; gap:6px">
+      <div style="display:flex; justify-content:space-between">${p.active ? `<span class="pr-active-tag">▶ </span>` : ""}${label}</div>
       <div class="small">${detail}${timerPill}</div>
       ${timerButtons}
       ${continueButton}
@@ -1400,7 +1571,7 @@ function pairsStatus(v, lang) {
       ${skipButton}
     </div>`;
   }).join("");
-  return `<div class="card"><div class="label">${t(lang, "thisRoundLabel")}</div><div class="pairs-list">${rows}</div></div>`;
+  return `<div class="card"><div class="label">${tf(lang, "thisRoundCountLabel", { done: v.pairsDoneCount, total: v.pairsStatus.length })}</div><div class="pairs-list">${rows}</div></div>`;
 }
 
 function renderRound(v) {
