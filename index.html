@@ -318,6 +318,8 @@ const T = {
     removedByHost: "The host removed you from the room.",
     skippedStatus: "✗ disconnected",
     roundSkippedFlash: "😴 Round skipped — a player disconnected",
+    stillChoosingHost: "Still choosing words…",
+    skipPairBtn: "Skip (disconnected)",
     backBtn: "Back",
     roomCodeLabel: "Room code — share with everyone",
     roomCodeHint: "They open this same website and tap Join",
@@ -406,6 +408,8 @@ const T = {
     removedByHost: "El anfitrión te eliminó de la sala.",
     skippedStatus: "✗ desconexión",
     roundSkippedFlash: "😴 Ronda omitida — un jugador se desconectó",
+    stillChoosingHost: "Todavía eligiendo palabras…",
+    skipPairBtn: "Omitir (desconectado)",
     backBtn: "Atrás",
     roomCodeLabel: "Código de la sala — compártelo con todos",
     roomCodeHint: "Ellos abren este mismo sitio y tocan Unirse",
@@ -490,6 +494,8 @@ const MAX_PLAYERS = 20;
 const PEER_PREFIX = "medium-mindmeld-";
 const GUEST_RECONNECT_DELAY = 1500;
 const GUEST_RECONNECT_MAX_TRIES = 6; // while the tab is actively visible
+const HEARTBEAT_INTERVAL = 4000;
+const HEARTBEAT_TIMEOUT = 13000; // no pong/message in this long → treat as dead, even without a "close" event
 const ICE_SERVERS = {
   iceServers: [
     { urls: "stun:stun.l.google.com:19302" },
@@ -511,6 +517,20 @@ let uiLang = localStorage.getItem("medium-lang") || "en"; // personal language p
 function curLang() { return (myView && myView.lang) || uiLang; }
 let inviteCode = new URLSearchParams(location.search).get("code");
 inviteCode = inviteCode ? inviteCode.toUpperCase().replace(/[^A-Z]/g, "").slice(0, 4) : "";
+
+/* Keep the screen from sleeping mid-game — the OS releases the lock whenever the tab
+   is hidden, so re-acquire it every time the tab comes back to the foreground. */
+let wakeLock = null;
+async function requestWakeLock() {
+  if (!("wakeLock" in navigator)) return;
+  try {
+    wakeLock = await navigator.wakeLock.request("screen");
+    wakeLock.addEventListener("release", () => { wakeLock = null; });
+  } catch (e) { /* denied, unsupported, or low battery — fine, just no lock */ }
+}
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "visible" && role && !wakeLock) requestWakeLock();
+});
 
 /* ---------------- HOST STATE ---------------- */
 const H = {
@@ -590,26 +610,42 @@ function nextRound() {
   broadcast();
 }
 
-/* Pairs with a disconnected member can never finish — mark them done so the round can end */
-function resolveStuckPairs() {
-  if (H.stage !== "round") return;
-  H.pairs.forEach(pair => {
-    if (pair.phase === "done") return;
-    if (!hostPlayer(pair.a)?.connected || !hostPlayer(pair.b)?.connected) {
-      pair.phase = "done";
-      pair.skipped = true;
-    }
-  });
-}
-
-/* Shared drop path: PeerJS close event + heartbeat health check both land here */
+/* Shared drop path: PeerJS close event + heartbeat health check both land here.
+   Disconnecting does NOT auto-resolve their pair — it just waits, so a reconnecting
+   player resumes exactly where they left off. Only the host can force a stuck pair
+   to finish, via skipPair(). */
 function dropPlayer(id) {
   const p = H.players.find(p => p.id === id);
   if (!p) return;
   if (H.stage === "lobby") H.players = H.players.filter(x => x.id !== id);
   else p.connected = false;
-  resolveStuckPairs();
   broadcast();
+}
+
+/* Host-only: force a pair stuck on a disconnected member to finish so the round can move on */
+function skipPair(i) {
+  const pair = H.pairs[i];
+  if (!pair || pair.phase === "done") return;
+  if (hostPlayer(pair.a)?.connected && hostPlayer(pair.b)?.connected) return; // only for stuck/disconnected pairs
+  pair.phase = "done";
+  pair.skipped = true;
+  broadcast();
+}
+
+/* WebRTC data channels can die silently (backgrounded tab, wifi/cell handoff) without
+   ever firing PeerJS's "close" event, leaving a guest stuck on stale state forever.
+   Ping everyone on an interval; anyone who stops answering gets dropped like a real close. */
+let heartbeatTimer = null;
+function startHeartbeat() {
+  if (heartbeatTimer) return;
+  heartbeatTimer = setInterval(() => {
+    const now = Date.now();
+    H.players.forEach(p => {
+      if (p.id === "me" || !p.connected) return;
+      if (p.lastPong != null && now - p.lastPong > HEARTBEAT_TIMEOUT) { dropPlayer(p.id); return; }
+      if (p.conn) { try { p.conn.send({ t: "ping" }); } catch (e) {} }
+    });
+  }, HEARTBEAT_INTERVAL);
 }
 
 function pairOf(id) { return H.pairs.find(p => p.a === id || p.b === id); }
@@ -696,12 +732,21 @@ function viewFor(id) {
   };
   if (H.stage !== "round" || !me) return base;
 
-  base.pairsStatus = H.pairs.map(p => ({
-    names: [hostPlayer(p.a).name, hostPlayer(p.b).name],
-    done: p.phase === "done",
-    skipped: !!p.skipped,
-    points: p.pointsBy ? [p.pointsBy[p.a], p.pointsBy[p.b]] : null,
-  }));
+  base.pairsStatus = H.pairs.map(p => {
+    const row = {
+      names: [hostPlayer(p.a).name, hostPlayer(p.b).name],
+      done: p.phase === "done",
+      skipped: !!p.skipped,
+      points: p.pointsBy ? [p.pointsBy[p.a], p.pointsBy[p.b]] : null,
+      disconnected: !hostPlayer(p.a).connected || !hostPlayer(p.b).connected,
+    };
+    if (base.isHost && p.phase !== "done") {
+      row.phase = p.phase;
+      row.attempt = p.attempt;
+      row.words = p.phase !== "pick" ? [p.picks[p.a] ?? null, p.picks[p.b] ?? null] : null;
+    }
+    return row;
+  });
   base.allDone = H.pairs.every(p => p.phase === "done");
 
   const pair = pairOf(id);
@@ -742,6 +787,7 @@ function broadcast() {
 
 function setupHost(name) {
   role = "host"; myName = name; myId = "me";
+  requestWakeLock();
   const code = roomCode();
   renderConnecting(t(uiLang, "creatingRoom"));
   peer = new Peer(PEER_PREFIX + code, { config: ICE_SERVERS });
@@ -750,10 +796,17 @@ function setupHost(name) {
     H.stage = "lobby";
     H.lang = uiLang;
     H.code = code;
+    startHeartbeat();
     broadcast();
   });
   peer.on("connection", conn => {
     conn.on("data", msg => {
+      if (msg.t === "pong") {
+        const pid = H.connMap[conn.peer];
+        const pl = pid && hostPlayer(pid);
+        if (pl) pl.lastPong = Date.now();
+        return;
+      }
       if (msg.t === "join") {
         if (H.stage !== "lobby") {
           // allow reconnect by name mid-game — keep the player's logical id stable,
@@ -762,6 +815,7 @@ function setupHost(name) {
           if (existing) {
             existing.conn = conn;
             existing.connected = true;
+            existing.lastPong = Date.now();
             H.connMap[conn.peer] = existing.id;
             broadcast();
             return;
@@ -771,7 +825,7 @@ function setupHost(name) {
         if (H.players.length >= MAX_PLAYERS) { conn.send({ t: "reject", reason: "full" }); return; }
         let nm = msg.name.trim().slice(0, 16) || "Player";
         while (H.players.some(p => p.name === nm)) nm += "'";
-        H.players.push({ id: conn.peer, name: nm, conn, score: 0, hand: [], connected: true });
+        H.players.push({ id: conn.peer, name: nm, conn, score: 0, hand: [], connected: true, lastPong: Date.now() });
         H.connMap[conn.peer] = conn.peer;
         conn.send({ t: "welcome", name: nm });
         broadcast();
@@ -796,9 +850,12 @@ function setupHost(name) {
 let guestReconnectAttempts = 0;
 let guestReconnectTimer = null;
 let guestListenerAttached = false;
+let lastHostMsgAt = 0;
+let guestWatchdogTimer = null;
 
 function setupGuest(name, code) {
   role = "guest"; myName = name;
+  requestWakeLock();
   guestReconnectAttempts = 0;
   renderConnecting(tf(uiLang, "joiningRoom", { code }));
   connectToHost(name, code);
@@ -811,6 +868,15 @@ function setupGuest(name, code) {
       }
     });
   }
+  if (!guestWatchdogTimer) {
+    // The host pings on HEARTBEAT_INTERVAL — if nothing (ping or otherwise) has come
+    // through in a while, the data channel likely died silently without a "close" event.
+    guestWatchdogTimer = setInterval(() => {
+      if (role === "guest" && hostConn && hostConn.open && Date.now() - lastHostMsgAt > HEARTBEAT_TIMEOUT) {
+        try { hostConn.close(); } catch (e) {}
+      }
+    }, HEARTBEAT_INTERVAL);
+  }
 }
 
 function connectToHost(name, code) {
@@ -818,9 +884,11 @@ function connectToHost(name, code) {
   peer.on("open", () => {
     guestReconnectAttempts = 0;
     hostConn = peer.connect(PEER_PREFIX + code.toUpperCase(), { reliable: true });
-    hostConn.on("open", () => hostConn.send({ t: "join", name }));
+    hostConn.on("open", () => { lastHostMsgAt = Date.now(); hostConn.send({ t: "join", name }); });
     hostConn.on("data", msg => {
-      if (msg.t === "view") { myView = msg.view; render(); }
+      lastHostMsgAt = Date.now();
+      if (msg.t === "ping") { try { hostConn.send({ t: "pong" }); } catch (e) {} }
+      else if (msg.t === "view") { myView = msg.view; render(); }
       else if (msg.t === "welcome") { myName = msg.name; }
       else if (msg.t === "removed") { renderError(t(curLang(), "removedByHost")); }
       else if (msg.t === "reject") { renderError(t(uiLang, msg.reason === "full" ? "roomFull" : "gameAlreadyStarted")); }
@@ -860,6 +928,7 @@ window.actGuess = () => {
   send({ t: "guess", word: inp.value });
 };
 window.actHostResult = (i, match) => { if (role === "host") hostSetResult(i, match); };
+window.actSkipPair = i => { if (role === "host") skipPair(i); };
 window.actMode = m => { if (role === "host" && H.stage === "lobby") { H.mode = m; broadcast(); } };
 window.actLang = lang => {
   if (role === "host" && H.stage === "lobby") {
@@ -1075,18 +1144,28 @@ function hostControls(v, lang) {
 function pairsStatus(v, lang) {
   if (!v.pairsStatus) return "";
   const rows = v.pairsStatus.map((p, i) => {
-    const label = `<span>${esc(p.names[0])} + ${esc(p.names[1])}</span>
+    const label = `<span>${esc(p.names[0])} + ${esc(p.names[1])}${p.disconnected && !p.done ? ` <span class="small">(${t(lang, "skippedStatus")})</span>` : ""}</span>
       <span class="st ${p.done ? (p.points ? "done" : "fail") : ""}">${p.done ? (p.points ? "✓ +" + p.points.join(" / +") + " pts" : t(lang, p.skipped ? "skippedStatus" : "noMatchStatus")) : t(lang, "playingStatus")}</span>`;
-    if (v.isHost && v.mode === "local" && !p.done) {
-      return `<div class="pr" style="flex-direction:column; align-items:stretch; gap:6px">
-        <div style="display:flex; justify-content:space-between">${label}</div>
+    if (!v.isHost || p.done) {
+      return `<div class="pr">${label}</div>`;
+    }
+    // Host-only live detail: current chance + the words once both are revealed
+    const detail = p.phase === "pick"
+      ? t(lang, "stillChoosingHost")
+      : tf(lang, "chanceLabel", { a: p.attempt, lo: v.scoring[p.attempt][0], hi: v.scoring[p.attempt][1] })
+        + (p.words && p.words[0] && p.words[1] ? ` — ${esc(p.words[0])} ↔ ${esc(p.words[1])}` : "");
+    const matchButtons = v.mode === "local" && p.phase === "guess" ? `
         <div class="row">
           <button onclick="actHostResult(${i}, true)">${t(lang, "weMatchedBtn")}</button>
           <button class="secondary" onclick="actHostResult(${i}, false)">${t(lang, "noMatchBtn")}</button>
-        </div>
-      </div>`;
-    }
-    return `<div class="pr">${label}</div>`;
+        </div>` : "";
+    const skipButton = p.disconnected ? `<button class="secondary" onclick="actSkipPair(${i})">${t(lang, "skipPairBtn")}</button>` : "";
+    return `<div class="pr" style="flex-direction:column; align-items:stretch; gap:6px">
+      <div style="display:flex; justify-content:space-between">${label}</div>
+      <div class="small">${detail}</div>
+      ${matchButtons}
+      ${skipButton}
+    </div>`;
   }).join("");
   return `<div class="card"><div class="label">${t(lang, "thisRoundLabel")}</div><div class="pairs-list">${rows}</div></div>`;
 }
