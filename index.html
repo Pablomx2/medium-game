@@ -349,7 +349,7 @@ const T = {
     countdownLabel: "Count down together — 3, 2, 1 — and say your word out loud!",
     weMatchedBtn: "🤝 We matched!",
     noMatchBtn: "✗ No match",
-    eitherCanTap: "Either of you can tap the result",
+    hostConfirmLabel: "The host will confirm the result below",
     yourWordLabel: "Your word",
     partnerWordLabel: "{partner}'s word",
     waitingForPartner: "Waiting for {partner}…",
@@ -437,7 +437,7 @@ const T = {
     countdownLabel: "Cuenten juntos — 3, 2, 1 — ¡y digan su palabra en voz alta!",
     weMatchedBtn: "🤝 ¡Coincidimos!",
     noMatchBtn: "✗ No coincidió",
-    eitherCanTap: "Cualquiera de los dos puede marcar el resultado",
+    hostConfirmLabel: "El anfitrión confirmará el resultado abajo",
     yourWordLabel: "Tu palabra",
     partnerWordLabel: "Palabra de {partner}",
     waitingForPartner: "Esperando a {partner}…",
@@ -658,13 +658,10 @@ function handleGuess(id, word) {
   broadcast();
 }
 
-/* Local mode: pair said their words out loud — either player reports the result */
-function handleResult(id, match) {
-  const pair = pairOf(id);
+/* Local mode: pair said their words out loud — only the host reports the result (by pair index) */
+function hostSetResult(i, match) {
+  const pair = H.pairs[i];
   if (H.mode !== "local" || !pair || pair.phase !== "guess") return;
-  const now = Date.now();
-  if (pair.lastResultAt && now - pair.lastResultAt < 1200) return; // both tapped at once — count it once
-  pair.lastResultAt = now;
   pair.history.push({ a: null, b: null, match });
   if (match) {
     pair.pointsBy = { [pair.a]: rollPoints(pair.attempt), [pair.b]: rollPoints(pair.attempt) };
@@ -681,7 +678,6 @@ function handleResult(id, match) {
 function hostMsg(fromId, msg) {
   if (msg.t === "pick") handlePick(fromId, msg.word);
   else if (msg.t === "guess") handleGuess(fromId, msg.word);
-  else if (msg.t === "result") handleResult(fromId, !!msg.match);
 }
 
 /* Build the personalized view each player renders from */
@@ -863,7 +859,7 @@ window.actGuess = () => {
   if (!inp || !norm(inp.value)) return;
   send({ t: "guess", word: inp.value });
 };
-window.actResult = m => send({ t: "result", match: m });
+window.actHostResult = (i, match) => { if (role === "host") hostSetResult(i, match); };
 window.actMode = m => { if (role === "host" && H.stage === "lobby") { H.mode = m; broadcast(); } };
 window.actLang = lang => {
   if (role === "host" && H.stage === "lobby") {
@@ -1078,9 +1074,20 @@ function hostControls(v, lang) {
 
 function pairsStatus(v, lang) {
   if (!v.pairsStatus) return "";
-  const rows = v.pairsStatus.map(p => `
-    <div class="pr"><span>${esc(p.names[0])} + ${esc(p.names[1])}</span>
-    <span class="st ${p.done ? (p.points ? "done" : "fail") : ""}">${p.done ? (p.points ? "✓ +" + p.points.join(" / +") + " pts" : t(lang, p.skipped ? "skippedStatus" : "noMatchStatus")) : t(lang, "playingStatus")}</span></div>`).join("");
+  const rows = v.pairsStatus.map((p, i) => {
+    const label = `<span>${esc(p.names[0])} + ${esc(p.names[1])}</span>
+      <span class="st ${p.done ? (p.points ? "done" : "fail") : ""}">${p.done ? (p.points ? "✓ +" + p.points.join(" / +") + " pts" : t(lang, p.skipped ? "skippedStatus" : "noMatchStatus")) : t(lang, "playingStatus")}</span>`;
+    if (v.isHost && v.mode === "local" && !p.done) {
+      return `<div class="pr" style="flex-direction:column; align-items:stretch; gap:6px">
+        <div style="display:flex; justify-content:space-between">${label}</div>
+        <div class="row">
+          <button onclick="actHostResult(${i}, true)">${t(lang, "weMatchedBtn")}</button>
+          <button class="secondary" onclick="actHostResult(${i}, false)">${t(lang, "noMatchBtn")}</button>
+        </div>
+      </div>`;
+    }
+    return `<div class="pr">${label}</div>`;
+  }).join("");
   return `<div class="card"><div class="label">${t(lang, "thisRoundLabel")}</div><div class="pairs-list">${rows}</div></div>`;
 }
 
@@ -1123,11 +1130,7 @@ function renderRound(v) {
           <div class="center"><span class="attempt-pill">${tf(lang, "chanceLabel", { a: v.attempt, lo: v.scoring[v.attempt][0], hi: v.scoring[v.attempt][1] })}</span></div>
           ${hist ? `<div class="stack">${hist}</div>` : ""}
           <div class="label center">${t(lang, "countdownLabel")}</div>
-          <div class="row">
-            <button onclick="actResult(true)">${t(lang, "weMatchedBtn")}</button>
-            <button class="secondary" onclick="actResult(false)">${t(lang, "noMatchBtn")}</button>
-          </div>
-          <div class="small center">${t(lang, "eitherCanTap")}</div>
+          <div class="status-banner waiting-pulse">${t(lang, "hostConfirmLabel")}</div>
         </div>`;
     } else if (v.phase === "guess") {
       body = `
