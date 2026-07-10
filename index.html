@@ -418,6 +418,7 @@ const T = {
     logEmptyMsg: "No results yet — check back once a pair finishes.",
     nowPlayingLabel: "👀 Now playing",
     spectatePickingStatus: "Still choosing their words…",
+    spectateMysteryPair: "🤫 Two players",
   },
   es: {
     tagline: "Piensa en una palabra entre las dos palabras. Conecten mentes, sumen puntos.",
@@ -535,6 +536,7 @@ const T = {
     logEmptyMsg: "Aún no hay resultados — vuelve a revisar cuando una pareja termine.",
     nowPlayingLabel: "👀 Jugando ahora",
     spectatePickingStatus: "Todavía eligiendo sus palabras…",
+    spectateMysteryPair: "🤫 Dos jugadores",
   },
 };
 function t(lang, key) {
@@ -904,12 +906,15 @@ function partnerId(pair, id) { return pair.a === id ? pair.b : pair.a; }
 
 /* What everyone NOT currently playing (waiting for their turn, done for the round, or on
    a bye) gets to watch: the pair currently up, their words once both have picked, and the
-   live countdown. Returns null once the active slot has nothing in progress. */
+   live countdown. Returns null once the active slot has nothing in progress.
+   While the pair is still picking, their identity stays hidden — same rule the pair itself
+   is held to (see viewFor's "pick" branch) — so spectators can't tip either player off about
+   who they're about to face. */
 function activePairView() {
   const pair = H.pairs[H.activePair];
   if (!pair || pair.phase === "done") return null;
   return {
-    names: [hostPlayer(pair.a).name, hostPlayer(pair.b).name],
+    names: pair.phase === "guess" ? [hostPlayer(pair.a).name, hostPlayer(pair.b).name] : null,
     phase: pair.phase,
     attempt: pair.attempt,
     words: pair.phase === "guess" ? [pair.picks[pair.a] ?? null, pair.picks[pair.b] ?? null] : null,
@@ -1494,9 +1499,12 @@ function spectateCard(v, lang) {
     </div>
     <div class="center"><span class="attempt-pill">${tf(lang, "chanceLabel", { a: s.attempt, lo: v.scoring[s.attempt][0], hi: v.scoring[s.attempt][1] })}</span>${timerPill}</div>`
     : `<div class="status-banner waiting-pulse">${t(lang, "spectatePickingStatus")}</div>`;
+  // Names stay null until words are locked in (see activePairView) so spectators can't
+  // tip either player off about who they're about to face.
+  const whoLine = s.names ? `${esc(s.names[0])} + ${esc(s.names[1])}` : t(lang, "spectateMysteryPair");
   return `<div class="card stack">
     <div class="label">${t(lang, "nowPlayingLabel")}</div>
-    <div class="center small">${esc(s.names[0])} + ${esc(s.names[1])}</div>
+    <div class="center small">${whoLine}</div>
     ${body}
   </div>`;
 }
