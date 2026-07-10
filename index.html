@@ -518,6 +518,18 @@ function curLang() { return (myView && myView.lang) || uiLang; }
 let inviteCode = new URLSearchParams(location.search).get("code");
 inviteCode = inviteCode ? inviteCode.toUpperCase().replace(/[^A-Z]/g, "").slice(0, 4) : "";
 
+/* Persistent per-device id so a reconnecting guest is recognized by identity, not by
+   name + "currently marked disconnected" — that race let fast reconnects (faster than
+   the heartbeat timeout) get told the game had already started. */
+function getDeviceId() {
+  let id = localStorage.getItem("medium-pid");
+  if (!id) {
+    id = (crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).slice(2) + Date.now().toString(36));
+    localStorage.setItem("medium-pid", id);
+  }
+  return id;
+}
+
 /* Keep the screen from sleeping mid-game — the OS releases the lock whenever the tab
    is hidden, so re-acquire it every time the tab comes back to the foreground. */
 let wakeLock = null;
@@ -809,9 +821,13 @@ function setupHost(name) {
       }
       if (msg.t === "join") {
         if (H.stage !== "lobby") {
-          // allow reconnect by name mid-game — keep the player's logical id stable,
-          // just repoint the live connection so H.pairs/H.schedule references stay valid
-          const existing = H.players.find(p => p.name === msg.name && !p.connected);
+          // allow reconnect mid-game — matched by persistent device id (not name +
+          // "currently marked disconnected") so a fast reconnect that beats the heartbeat
+          // timeout still gets recognized, instead of being told the game already started.
+          // Falls back to the old name-based match for any client that predates device ids.
+          const existing = msg.pid
+            ? H.players.find(p => p.pid === msg.pid)
+            : H.players.find(p => p.name === msg.name && !p.connected);
           if (existing) {
             existing.conn = conn;
             existing.connected = true;
@@ -825,7 +841,7 @@ function setupHost(name) {
         if (H.players.length >= MAX_PLAYERS) { conn.send({ t: "reject", reason: "full" }); return; }
         let nm = msg.name.trim().slice(0, 16) || "Player";
         while (H.players.some(p => p.name === nm)) nm += "'";
-        H.players.push({ id: conn.peer, name: nm, conn, score: 0, hand: [], connected: true, lastPong: Date.now() });
+        H.players.push({ id: conn.peer, name: nm, conn, score: 0, hand: [], connected: true, lastPong: Date.now(), pid: msg.pid });
         H.connMap[conn.peer] = conn.peer;
         conn.send({ t: "welcome", name: nm });
         broadcast();
@@ -884,7 +900,7 @@ function connectToHost(name, code) {
   peer.on("open", () => {
     guestReconnectAttempts = 0;
     hostConn = peer.connect(PEER_PREFIX + code.toUpperCase(), { reliable: true });
-    hostConn.on("open", () => { lastHostMsgAt = Date.now(); hostConn.send({ t: "join", name }); });
+    hostConn.on("open", () => { lastHostMsgAt = Date.now(); hostConn.send({ t: "join", name, pid: getDeviceId() }); });
     hostConn.on("data", msg => {
       lastHostMsgAt = Date.now();
       if (msg.t === "ping") { try { hostConn.send({ t: "pong" }); } catch (e) {} }
