@@ -415,6 +415,8 @@ const T = {
     hideLogBtn: "📜 Hide match log",
     logMatchLine: "R{r}: {a} + {b} matched — {a} +{ptsA}, {b} +{ptsB}",
     logNoMatchLine: "R{r}: {a} + {b} — no match",
+    nowPlayingLabel: "👀 Now playing",
+    spectatePickingStatus: "Still choosing their words…",
   },
   es: {
     tagline: "Piensa en una palabra entre las dos palabras. Conecten mentes, sumen puntos.",
@@ -529,6 +531,8 @@ const T = {
     hideLogBtn: "📜 Ocultar registro",
     logMatchLine: "R{r}: {a} + {b} coincidieron — {a} +{ptsA}, {b} +{ptsB}",
     logNoMatchLine: "R{r}: {a} + {b} — no coincidió",
+    nowPlayingLabel: "👀 Jugando ahora",
+    spectatePickingStatus: "Todavía eligiendo sus palabras…",
   },
 };
 function t(lang, key) {
@@ -896,6 +900,21 @@ function startHeartbeat() {
 function pairOf(id) { return H.pairs.find(p => p.a === id || p.b === id); }
 function partnerId(pair, id) { return pair.a === id ? pair.b : pair.a; }
 
+/* What everyone NOT currently playing (waiting for their turn, done for the round, or on
+   a bye) gets to watch: the pair currently up, their words once both have picked, and the
+   live countdown. Returns null once the active slot has nothing in progress. */
+function activePairView() {
+  const pair = H.pairs[H.activePair];
+  if (!pair || pair.phase === "done") return null;
+  return {
+    names: [hostPlayer(pair.a).name, hostPlayer(pair.b).name],
+    phase: pair.phase,
+    attempt: pair.attempt,
+    words: pair.phase === "guess" ? [pair.picks[pair.a] ?? null, pair.picks[pair.b] ?? null] : null,
+    timer: H.timer && H.timer.pairIndex === H.activePair ? timerSnapshot() : null,
+  };
+}
+
 /* Host-only running log of finished pairs — who matched (or didn't) and points added.
    Only called for real outcomes (match / final no-match / timeout-final), never for
    host-forced skips, since those aren't a result worth logging. */
@@ -1080,7 +1099,7 @@ function viewFor(id) {
   }
 
   const pair = pairOf(id);
-  if (!pair) { base.bye = true; return base; }
+  if (!pair) { base.bye = true; base.spectate = activePairView(); return base; }
 
   base.phase = pair.phase;
   base.attempt = pair.attempt;
@@ -1097,6 +1116,7 @@ function viewFor(id) {
     // stays a mystery until this pair is actually promoted to "pick".
     base.hand = me.hand;
     base.myPick = null;
+    base.spectate = activePairView();
     return base;
   }
 
@@ -1122,6 +1142,7 @@ function viewFor(id) {
     base.points = pair.pointsBy ? pair.pointsBy[id] : 0;
     base.partnerPoints = pair.pointsBy ? pair.pointsBy[pid] : 0;
     base.skipped = !!pair.skipped;
+    base.spectate = activePairView();
   }
   return base;
 }
@@ -1454,6 +1475,30 @@ function scoreTable(v, final, lang) {
   return `<table class="score"><tr><th>${t(lang, "playerCol")}</th><th style="text-align:right">${t(lang, "pointsCol")}</th></tr>${rows}</table>`;
 }
 
+// Shown to anyone not currently playing (waiting for their turn, done for the round, or on
+// a bye) so they have something to watch instead of a blank screen: who's up, their words
+// once both have picked, and the live countdown. Host skips this — pairsStatus already
+// gives them the full multi-pair view.
+function spectateCard(v, lang) {
+  if (v.isHost || !v.spectate) return "";
+  const s = v.spectate;
+  const timerPill = s.timer
+    ? `<span class="timer-pill js-countdown ${s.timer.paused ? "paused" : ""}">${s.timer.paused ? t(lang, "pausedLabel") : `⏱ ${Math.ceil(s.timer.remainingMs / 1000)}s`}</span>` : "";
+  const body = s.words && s.words[0] && s.words[1] ? `
+    <div class="pair-words">
+      <div class="pair-word"><span class="who">${esc(s.names[0])}</span>${esc(s.words[0])}</div>
+      <span class="vs">↔</span>
+      <div class="pair-word"><span class="who">${esc(s.names[1])}</span>${esc(s.words[1])}</div>
+    </div>
+    <div class="center"><span class="attempt-pill">${tf(lang, "chanceLabel", { a: s.attempt, lo: v.scoring[s.attempt][0], hi: v.scoring[s.attempt][1] })}</span>${timerPill}</div>`
+    : `<div class="status-banner waiting-pulse">${t(lang, "spectatePickingStatus")}</div>`;
+  return `<div class="card stack">
+    <div class="label">${t(lang, "nowPlayingLabel")}</div>
+    <div class="center small">${esc(s.names[0])} + ${esc(s.names[1])}</div>
+    ${body}
+  </div>`;
+}
+
 // Client-side countdown animation: the host only broadcasts a remainingMs *snapshot* on state
 // changes (never every second — broadcast() re-renders the whole screen and would wipe an
 // in-progress guess). Guests animate that snapshot locally against their own clock, touching
@@ -1461,7 +1506,7 @@ function scoreTable(v, final, lang) {
 let countdownInterval = null;
 function syncCountdown(v) {
   if (countdownInterval) { clearInterval(countdownInterval); countdownInterval = null; }
-  const snap = v.timer || (v.pairsStatus && (v.pairsStatus.find(p => p.timer) || {}).timer);
+  const snap = v.timer || (v.pairsStatus && (v.pairsStatus.find(p => p.timer) || {}).timer) || (v.spectate && v.spectate.timer);
   const els = document.querySelectorAll(".js-countdown");
   if (!els.length || !snap || snap.paused) return;
   const anchor = Date.now(), base = snap.remainingMs;
@@ -1624,7 +1669,7 @@ function renderRound(v) {
   const lang = v.lang || uiLang;
   let body = "";
   if (v.bye) {
-    body = `<div class="card center">${t(lang, "relaxNextRound")}</div>`;
+    body = `<div class="card center">${t(lang, "relaxNextRound")}</div>${spectateCard(v, lang)}`;
   } else if (v.phase === "waiting") {
     // Not this pair's turn yet — cards shown but grayed out, no partner revealed.
     body = `
@@ -1632,7 +1677,7 @@ function renderRound(v) {
         <div class="label">${t(lang, "pickWordLabel")}</div>
         ${v.hand.map(w => `<button class="word-btn" disabled>${esc(w)}</button>`).join("")}
         <div class="status-banner waiting-pulse">${t(lang, "waitingYourTurnStatus")}</div>
-      </div>`;
+      </div>${spectateCard(v, lang)}`;
   } else if (v.phase === "pick") {
     // Their turn, but the partner stays anonymous until both of them have picked.
     body = `
@@ -1725,7 +1770,7 @@ function renderRound(v) {
           </div>
           ${v.points ? `<div class="center small">${tf(lang, "partnerRolled", { partner: esc(v.partner), points: v.partnerPoints })}</div>` : ""}
           <div class="status-banner">${t(lang, "waitingNextRound")}</div>
-        </div>`;
+        </div>${spectateCard(v, lang)}`;
     }
   }
   const draftSig = `${v.round}:${v.partner ?? ""}:${v.attempt ?? ""}`;
