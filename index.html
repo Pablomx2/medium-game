@@ -425,6 +425,8 @@ const T = {
     spectatePickingStatus: "Still choosing their words…",
     spectateMysteryPair: "🤫 Two players",
     spectateGuessesLabel: "Their guesses so far",
+    lastResultLabel: "🏁 Last result",
+    spectatePointsLine: "{a} +{ptsA} pts, {b} +{ptsB} pts",
     countMatchBtn: "🤝 Count as a match",
     revokeMatchBtn: "↩ Take back this match",
     overturnedNote: "Host's call",
@@ -549,6 +551,8 @@ const T = {
     spectatePickingStatus: "Todavía eligiendo sus palabras…",
     spectateMysteryPair: "🤫 Dos jugadores",
     spectateGuessesLabel: "Sus intentos hasta ahora",
+    lastResultLabel: "🏁 Resultado anterior",
+    spectatePointsLine: "{a} +{ptsA} pts, {b} +{ptsB} pts",
     countMatchBtn: "🤝 Contar como coincidencia",
     revokeMatchBtn: "↩ Anular esta coincidencia",
     overturnedNote: "Decisión del anfitrión",
@@ -655,6 +659,7 @@ const H = {
                           // until the host taps Continue (index can be 0 — always compare with !== null)
   kickedPids: new Set(),  // device pids permanently banned from this room (host used Kick) — survives reconnect attempts
   lastResult: null,       // snapshot for undoing the host's last local-mode We-matched/No-match tap
+  lastDone: null,         // how the most recent pair of this round ended — kept on screen for spectators
   lastGameRoster: null,   // {name, score, pid}[] from the game that just ended — for score continuity on restart
   log: [],                // host-only running history of pair outcomes — {round, names:[a,b], match, points:[a,b]|null}
 };
@@ -772,6 +777,7 @@ function nextRound() {
   if (H.roundIndex >= H.schedule.length) { H.stage = "end"; H.lastResult = null; captureLastGameRoster(); broadcast(); return; }
   H.stage = "round";
   H.lastResult = null;
+  H.lastDone = null;
   const connected = new Set(H.players.filter(p => p.connected).map(p => p.id));
   const pairIds = H.schedule[H.roundIndex].filter(([a, b]) => connected.has(a) && connected.has(b));
   const inRound = new Set(pairIds.flat());
@@ -929,9 +935,14 @@ function partnerId(pair, id) { return pair.a === id ? pair.b : pair.a; }
    who they're about to face. */
 function activePairView() {
   const pair = H.pairs[H.activePair];
-  if (!pair || pair.phase === "done") return null;
-  const live = pair.phase === "guess";
+  const live = !!pair && pair.phase === "guess";
+  // The result of the pair that just finished fills the gap while the next pair picks (and stays
+  // up after the round's last pair), so a match is something spectators actually get to see. It
+  // steps aside as soon as the next pair's own guesses start coming in.
+  const lastDone = !live && H.mode === "type" ? H.lastDone : null;
+  if (!pair || pair.phase === "done") return lastDone ? { phase: "done", lastDone } : null;
   return {
+    lastDone,
     names: live ? [hostPlayer(pair.a).name, hostPlayer(pair.b).name] : null,
     phase: pair.phase,
     attempt: pair.attempt,
@@ -955,6 +966,15 @@ function pairHistoryView(pair) {
   }));
 }
 
+/* What one player watches: the active pair, plus how the pair before them ended — except for the
+   two who played that turn, whose own result card already says it better. */
+function spectateViewFor(id) {
+  const s = activePairView();
+  if (!s || !s.lastDone || !s.lastDone.ids.includes(id)) return s;
+  const { lastDone, ...rest } = s;
+  return rest.phase === "done" ? null : rest;   // nothing live to watch either — show no card at all
+}
+
 /* Host-only running log of finished pairs — who matched (or didn't) and points added.
    Only called for real outcomes (match / final no-match / timeout-final), never for
    host-forced skips, since those aren't a result worth logging. */
@@ -969,6 +989,22 @@ function pairLogEntry(pair, match) {
 function logPairResult(pair, match) {
   pair.logIndex = H.log.length;   // so an overturn can rewrite this line instead of contradicting it
   H.log.push(pairLogEntry(pair, match));
+  H.lastDone = finishedPairView(pair, match);
+}
+
+/* How a pair's turn ended, kept for spectators after the pair itself is retired. Without this the
+   spectate feed can only ever show chances a pair MISSED: the moment they match, the pair goes
+   "done" and activePairView() jumps to whoever is up next, so the deciding guess — the whole point
+   of watching — flashes past unseen, and a pair matching on chance 1 shows no guesses at all. */
+function finishedPairView(pair, match) {
+  return {
+    ids: [pair.a, pair.b],   // so the two who played it don't get handed a recap of their own turn
+    names: [hostPlayer(pair.a).name, hostPlayer(pair.b).name],
+    words: [pair.picks[pair.a] ?? null, pair.picks[pair.b] ?? null],
+    history: pairHistoryView(pair),
+    match,
+    points: pair.pointsBy ? [pair.pointsBy[pair.a], pair.pointsBy[pair.b]] : null,
+  };
 }
 
 /* Rewrite a pair's existing log line after the host overturns it — the log should read as one
@@ -979,6 +1015,7 @@ function relogPairResult(pair, match) {
   entry.overturned = true;
   if (pair.logIndex != null && pair.logIndex < H.log.length) H.log[pair.logIndex] = entry;
   else { pair.logIndex = H.log.length; H.log.push(entry); }
+  H.lastDone = finishedPairView(pair, match);   // an overturned verdict replaces what spectators are looking at
 }
 
 /* Host-only: overrule the verdict on one chance of a pair in the current round. Typed mode
@@ -1197,7 +1234,7 @@ function viewFor(id) {
   }
 
   const pair = pairOf(id);
-  if (!pair) { base.bye = true; base.spectate = activePairView(); return base; }
+  if (!pair) { base.bye = true; base.spectate = spectateViewFor(id); return base; }
 
   base.phase = pair.phase;
   base.attempt = pair.attempt;
@@ -1215,7 +1252,7 @@ function viewFor(id) {
     // stays a mystery until this pair is actually promoted to "pick".
     base.hand = me.hand;
     base.myPick = null;
-    base.spectate = activePairView();
+    base.spectate = spectateViewFor(id);
     return base;
   }
 
@@ -1241,7 +1278,7 @@ function viewFor(id) {
     base.points = pair.pointsBy ? pair.pointsBy[id] : 0;
     base.partnerPoints = pair.pointsBy ? pair.pointsBy[pid] : 0;
     base.skipped = !!pair.skipped;
-    base.spectate = activePairView();
+    base.spectate = spectateViewFor(id);
   }
   return base;
 }
@@ -1610,6 +1647,9 @@ function historyRows(list, lang, actionFor) {
 function spectateCard(v, lang) {
   if (v.isHost || !v.spectate) return "";
   const s = v.spectate;
+  // Once the round's last pair is done there is no live pair left to describe — the card is then
+  // just the closing result, so nothing below may assume s.attempt/s.words exist.
+  const live = s.phase && s.phase !== "done";
   const timerPill = s.timer
     ? `<span class="timer-pill js-countdown ${s.timer.paused ? "paused" : ""}">${s.timer.paused ? t(lang, "pausedLabel") : `⏱ ${Math.ceil(s.timer.remainingMs / 1000)}s`}</span>` : "";
   // Typed mode only: the chances they've already burned, plus who's still typing — so
@@ -1642,10 +1682,31 @@ function spectateCard(v, lang) {
   // Names stay null until words are locked in (see activePairView) so spectators can't
   // tip either player off about who they're about to face.
   const whoLine = s.names ? `${esc(s.names[0])} + ${esc(s.names[1])}` : t(lang, "spectateMysteryPair");
-  return `<div class="card stack">
+  const nowCard = live ? `<div class="card stack">
     <div class="label">${t(lang, "nowPlayingLabel")}</div>
     <div class="center small">${whoLine}</div>
     ${body}
+  </div>` : "";
+  return nowCard + lastResultCard(s.lastDone, lang);
+}
+
+/* How the pair before this one ended: their words, every chance they took, and the outcome.
+   Shown between turns so the deciding guess doesn't vanish the instant it lands. */
+function lastResultCard(l, lang) {
+  if (!l) return "";
+  return `<div class="card stack">
+    <div class="label">${t(lang, "lastResultLabel")}</div>
+    <div class="center small">${esc(l.names[0])} + ${esc(l.names[1])}</div>
+    ${l.words[0] && l.words[1] ? `
+    <div class="pair-words">
+      <div class="pair-word"><span class="who">${esc(l.names[0])}</span>${esc(l.words[0])}</div>
+      <span class="vs">↔</span>
+      <div class="pair-word"><span class="who">${esc(l.names[1])}</span>${esc(l.words[1])}</div>
+    </div>` : ""}
+    ${historyRows(l.history, lang) ? `<div class="stack">${historyRows(l.history, lang)}</div>` : ""}
+    <div class="match-flash ${l.match ? "good" : "bad"}">${t(lang, l.match ? "matchedHist" : "noMatchHist")}</div>
+    ${l.match && l.points ? `<div class="center small">${tf(lang, "spectatePointsLine", {
+      a: esc(l.names[0]), ptsA: l.points[0], b: esc(l.names[1]), ptsB: l.points[1] })}</div>` : ""}
   </div>`;
 }
 
