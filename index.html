@@ -151,6 +151,11 @@
     font-size: 1rem;
   }
   .history-row .mark { font-size: 1.1rem; }
+  .pr .history-row { font-size: .85rem; padding: 6px 10px; }
+  .pr .history-row .mark { font-size: .95rem; }
+  .hist-item { display: flex; flex-direction: column; gap: 4px; }
+  .ov-note { text-align: center; font-size: .7rem; color: var(--muted); text-transform: uppercase; letter-spacing: 1px; }
+  button.mini { font-size: .8rem; padding: 7px 12px; }
   .match-flash {
     text-align: center; font-size: 1.6rem; font-weight: 800; padding: 10px;
   }
@@ -419,6 +424,12 @@ const T = {
     nowPlayingLabel: "👀 Now playing",
     spectatePickingStatus: "Still choosing their words…",
     spectateMysteryPair: "🤫 Two players",
+    spectateGuessesLabel: "Their guesses so far",
+    countMatchBtn: "🤝 Count as a match",
+    revokeMatchBtn: "↩ Take back this match",
+    overturnedNote: "Host's call",
+    spectateBothTyping: "Both are typing their guess…",
+    spectateOneLocked: "{name} locked in — waiting for {other}…",
   },
   es: {
     tagline: "Piensa en una palabra entre las dos palabras. Conecten mentes, sumen puntos.",
@@ -537,6 +548,12 @@ const T = {
     nowPlayingLabel: "👀 Jugando ahora",
     spectatePickingStatus: "Todavía eligiendo sus palabras…",
     spectateMysteryPair: "🤫 Dos jugadores",
+    spectateGuessesLabel: "Sus intentos hasta ahora",
+    countMatchBtn: "🤝 Contar como coincidencia",
+    revokeMatchBtn: "↩ Anular esta coincidencia",
+    overturnedNote: "Decisión del anfitrión",
+    spectateBothTyping: "Los dos están escribiendo su palabra…",
+    spectateOneLocked: "{name} ya la envió — falta {other}…",
   },
 };
 function t(lang, key) {
@@ -913,25 +930,95 @@ function partnerId(pair, id) { return pair.a === id ? pair.b : pair.a; }
 function activePairView() {
   const pair = H.pairs[H.activePair];
   if (!pair || pair.phase === "done") return null;
+  const live = pair.phase === "guess";
   return {
-    names: pair.phase === "guess" ? [hostPlayer(pair.a).name, hostPlayer(pair.b).name] : null,
+    names: live ? [hostPlayer(pair.a).name, hostPlayer(pair.b).name] : null,
     phase: pair.phase,
     attempt: pair.attempt,
-    words: pair.phase === "guess" ? [pair.picks[pair.a] ?? null, pair.picks[pair.b] ?? null] : null,
+    words: live ? [pair.picks[pair.a] ?? null, pair.picks[pair.b] ?? null] : null,
+    // Typed mode only: the guesses of every chance they've already burned, so spectators
+    // can follow the near-misses. Nothing leaks early — a chance only lands in history
+    // once both have locked in — and `locked` is just who's still typing, never their word.
+    history: live && H.mode === "type" ? pairHistoryView(pair) : null,
+    locked: live && H.mode === "type"
+      ? [pair.guesses[pair.a] !== undefined, pair.guesses[pair.b] !== undefined] : null,
+    timedOut: H.timedOutPair === H.activePair,
     timer: H.timer && H.timer.pairIndex === H.activePair ? timerSnapshot() : null,
   };
+}
+
+/* A pair's finished chances from the outside (a's guess vs b's guess), for anyone watching
+   rather than playing. Players get their own perspective-flipped copy in viewFor. */
+function pairHistoryView(pair) {
+  return pair.history.map(h => ({
+    mine: h.a, theirs: h.b, match: h.match, timeout: !!h.timeout, overturned: !!h.overturned,
+  }));
 }
 
 /* Host-only running log of finished pairs — who matched (or didn't) and points added.
    Only called for real outcomes (match / final no-match / timeout-final), never for
    host-forced skips, since those aren't a result worth logging. */
-function logPairResult(pair, match) {
-  H.log.push({
+function pairLogEntry(pair, match) {
+  return {
     round: H.roundIndex + 1,
     names: [hostPlayer(pair.a).name, hostPlayer(pair.b).name],
     match,
     points: match ? [pair.pointsBy[pair.a], pair.pointsBy[pair.b]] : null,
-  });
+  };
+}
+function logPairResult(pair, match) {
+  pair.logIndex = H.log.length;   // so an overturn can rewrite this line instead of contradicting it
+  H.log.push(pairLogEntry(pair, match));
+}
+
+/* Rewrite a pair's existing log line after the host overturns it — the log should read as one
+   settled result per pair, not a result plus a correction. If undo truncated the log out from
+   under us (or the pair never reached a logged outcome), fall back to appending. */
+function relogPairResult(pair, match) {
+  const entry = pairLogEntry(pair, match);
+  entry.overturned = true;
+  if (pair.logIndex != null && pair.logIndex < H.log.length) H.log[pair.logIndex] = entry;
+  else { pair.logIndex = H.log.length; H.log.push(entry); }
+}
+
+/* Host-only: overrule the verdict on one chance of a pair in the current round. Typed mode
+   matches on exact text, so a typo or a near-miss ("cats" vs "cat") reads as a miss — this
+   awards it anyway. It also runs the other way, taking back a match granted in error.
+   A pair can hold at most one winning chance, so granting is refused while it already has
+   points (revoke first), which keeps history/score/log in step no matter the order of taps. */
+function overturnResult(i, chanceIdx, match) {
+  const pair = H.pairs[i];
+  if (!pair || pair.skipped) return;
+  const h = pair.history[chanceIdx];
+  if (!h || !!h.match === match) return;          // nothing to overturn
+  if (match && pair.pointsBy) return;             // already won a chance
+  if (!match && !pair.pointsBy) return;           // nothing to take back
+
+  // The pair's state is about to stop matching any pending undo snapshot, so drop it outright
+  // rather than leaving undo to restore a pre-overturn shape the host no longer sees.
+  H.lastResult = null;
+  if (H.timer && H.timer.pairIndex === i) H.timer = null;
+  if (H.timedOutPair === i) H.timedOutPair = null;
+
+  const wasDone = pair.phase === "done";
+  h.match = match;
+  h.overturned = true;
+
+  if (match) {
+    // Points are worth what that chance was worth — chance 1 pays 7-9, chance 3 pays 1-3 —
+    // not what the pair happens to be on now.
+    pair.pointsBy = { [pair.a]: rollPoints(chanceIdx + 1), [pair.b]: rollPoints(chanceIdx + 1) };
+    [pair.a, pair.b].forEach(pid => hostPlayer(pid).score += pair.pointsBy[pid]);
+  } else {
+    [pair.a, pair.b].forEach(pid => hostPlayer(pid).score -= pair.pointsBy[pid]);
+    pair.pointsBy = null;
+  }
+  // Either way the pair's turn is settled: a revoked match doesn't hand back the chances it
+  // skipped past (undoLastResult is the tool for replaying a turn, right after a mistaken tap).
+  pair.phase = "done";
+  if (!wasDone) advanceActivePair();
+  relogPairResult(pair, match);
+  broadcast();
 }
 
 function handlePick(id, word) {
@@ -1034,6 +1121,7 @@ function undoLastResult() {
   if (!pair) { H.lastResult = null; broadcast(); return; }
   const bothConnected = hostPlayer(pair.a)?.connected && hostPlayer(pair.b)?.connected;
   H.log.length = logLenBefore;
+  pair.logIndex = null;   // its line just got truncated away; a later overturn must append, not overwrite
   pair.attempt = prevAttempt;
   pair.history = prevHistory;
   pair.pointsBy = prevPointsBy;
@@ -1090,6 +1178,9 @@ function viewFor(id) {
         waiting: p.phase === "waiting",
         skipped: !!p.skipped,
         points: p.pointsBy ? [p.pointsBy[p.a], p.pointsBy[p.b]] : null,
+        // Every decided chance, finished pairs included: the host reads this to follow along
+        // and to spot the typo they may want to overturn.
+        history: p.history.length ? pairHistoryView(p) : null,
         disconnected: !hostPlayer(p.a).connected || !hostPlayer(p.b).connected,
         timedOut: H.timedOutPair === i,
       };
@@ -1115,6 +1206,7 @@ function viewFor(id) {
     theirs: pair.a === id ? h.b : h.a,
     match: h.match,
     timeout: !!h.timeout,
+    overturned: !!h.overturned,
   }));
   base.timedOutWaiting = H.timedOutPair === H.pairs.indexOf(pair);
 
@@ -1360,6 +1452,7 @@ window.actContinue = () => {
 };
 window.actKick = id => { if (role === "host") kickPlayer(id); };
 window.actUndoResult = () => { if (role === "host") undoLastResult(); };
+window.actOverturn = (i, chanceIdx, match) => { if (role === "host") overturnResult(i, chanceIdx, match); };
 
 /* ---------------- RENDERING ---------------- */
 function esc(s) { return String(s).replace(/[&<>"']/g, c => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;" }[c])); }
@@ -1482,6 +1575,34 @@ function scoreTable(v, final, lang) {
   return `<table class="score"><tr><th>${t(lang, "playerCol")}</th><th style="text-align:right">${t(lang, "pointsCol")}</th></tr>${rows}</table>`;
 }
 
+/* One row per finished chance: the two guesses side by side (or, in local mode where nothing
+   is typed, just the verdict). Rows are perspective-relative — "mine" is the reader's own
+   guess when they're playing, and player A's when they're watching. */
+function historyRows(list, lang, actionFor) {
+  if (!list || !list.length) return "";
+  return list.map((h, i) => {
+    const row = h.timeout && !h.match ? `
+    <div class="history-row">
+      <span>${h.mine ? esc(h.mine) : "—"}</span>
+      <span class="mark">⏰</span>
+      <span>${h.theirs ? esc(h.theirs) : t(lang, "timedOutHist")}</span>
+    </div>` : h.mine == null && h.theirs == null ? `
+    <div class="history-row">
+      <span>${tf(lang, "chanceHistLabel", { n: i + 1 })}</span>
+      <span class="mark">${h.match ? "🤝" : "≠"}</span>
+      <span>${h.match ? t(lang, "matchedHist") : t(lang, "noMatchHist")}</span>
+    </div>` : `
+    <div class="history-row">
+      <span>${h.mine ? esc(h.mine) : "—"}</span>
+      <span class="mark">${h.match ? "🤝" : "≠"}</span>
+      <span>${h.theirs ? esc(h.theirs) : "—"}</span>
+    </div>`;
+    return `<div class="hist-item">${row}
+      ${h.overturned ? `<div class="ov-note">${t(lang, "overturnedNote")}</div>` : ""}
+      ${actionFor ? actionFor(h, i) : ""}</div>`;
+  }).join("");
+}
+
 // Shown to anyone not currently playing (waiting for their turn, done for the round, or on
 // a bye) so they have something to watch instead of a blank screen: who's up, their words
 // once both have picked, and the live countdown. Host skips this — pairsStatus already
@@ -1491,13 +1612,32 @@ function spectateCard(v, lang) {
   const s = v.spectate;
   const timerPill = s.timer
     ? `<span class="timer-pill js-countdown ${s.timer.paused ? "paused" : ""}">${s.timer.paused ? t(lang, "pausedLabel") : `⏱ ${Math.ceil(s.timer.remainingMs / 1000)}s`}</span>` : "";
+  // Typed mode only: the chances they've already burned, plus who's still typing — so
+  // everyone watching follows the guesses instead of staring at a lone countdown.
+  const hist = historyRows(s.history, lang);
+  // Who's still typing — but only while the pair is actually free to type: a frozen or paused
+  // game gets the same banner the pair itself sees, not a "still typing" that will never resolve.
+  const statusLine = s.timedOut
+    ? `<div class="match-flash bad">${t(lang, "timedOutFlash")}</div>
+       <div class="status-banner waiting-pulse">${t(lang, "waitingHostResume")}</div>`
+    : s.timer && s.timer.paused
+    ? `<div class="status-banner">${t(lang, "pausedBanner")}</div>`
+    : s.locked && s.names ? (
+      s.locked[0] !== s.locked[1]
+        ? `<div class="status-banner waiting-pulse">${tf(lang, "spectateOneLocked", {
+             name: esc(s.names[s.locked[0] ? 0 : 1]), other: esc(s.names[s.locked[0] ? 1 : 0]) })}</div>`
+        : !s.locked[0]
+        ? `<div class="status-banner waiting-pulse">${t(lang, "spectateBothTyping")}</div>` : ""
+    ) : "";
   const body = s.words && s.words[0] && s.words[1] ? `
     <div class="pair-words">
       <div class="pair-word"><span class="who">${esc(s.names[0])}</span>${esc(s.words[0])}</div>
       <span class="vs">↔</span>
       <div class="pair-word"><span class="who">${esc(s.names[1])}</span>${esc(s.words[1])}</div>
     </div>
-    <div class="center"><span class="attempt-pill">${tf(lang, "chanceLabel", { a: s.attempt, lo: v.scoring[s.attempt][0], hi: v.scoring[s.attempt][1] })}</span>${timerPill}</div>`
+    <div class="center"><span class="attempt-pill">${tf(lang, "chanceLabel", { a: s.attempt, lo: v.scoring[s.attempt][0], hi: v.scoring[s.attempt][1] })}</span>${timerPill}</div>
+    ${hist ? `<div class="label">${t(lang, "spectateGuessesLabel")}</div><div class="stack">${hist}</div>` : ""}
+    ${statusLine}`
     : `<div class="status-banner waiting-pulse">${t(lang, "spectatePickingStatus")}</div>`;
   // Names stay null until words are locked in (see activePairView) so spectators can't
   // tip either player off about who they're about to face.
@@ -1551,7 +1691,7 @@ function hostLogCard(v, lang) {
   const rows = v.log.length ? [...v.log].reverse().map(e => `<div class="small">${e.match
     ? tf(lang, "logMatchLine", { r: e.round, a: esc(e.names[0]), b: esc(e.names[1]), ptsA: e.points[0], ptsB: e.points[1] })
     : tf(lang, "logNoMatchLine", { r: e.round, a: esc(e.names[0]), b: esc(e.names[1]) })
-  }</div>`).join("") : `<div class="small">${t(lang, "logEmptyMsg")}</div>`;
+  }${e.overturned ? ` <span class="ov-note" style="display:inline">(${t(lang, "overturnedNote")})</span>` : ""}</div>`).join("") : `<div class="small">${t(lang, "logEmptyMsg")}</div>`;
   return `<div class="card stack">
     <button class="secondary" onclick="actToggleLog()">${t(lang, hostLogOpen ? "hideLogBtn" : "showLogBtn")} (${v.log.length})</button>
     ${hostLogOpen ? `<div class="stack">${rows}</div>` : ""}
@@ -1637,9 +1777,20 @@ function pairsStatus(v, lang) {
       <span class="st ${p.done ? (p.points ? "done" : "fail") : ""}">${p.done ? (p.points ? "✓ +" + p.points.join(" / +") + " pts" : t(lang, p.skipped ? "skippedStatus" : "noMatchStatus")) : t(lang, p.waiting ? "waitingTurnStatus" : "playingStatus")}</span>`;
     const continueButton = p.timedOut
       ? `<div class="small">⏰ ${t(lang, "timeUpStatus")}</div><button onclick="actContinue()">${t(lang, "continueBtn")}</button>` : "";
+    // Overturn controls, one per decided chance: grant a near-miss the app rejected on a typo,
+    // or take a granted match back. Offered in both directions but never both at once — a pair
+    // holds at most one winning chance, so with points on the board only the revoke shows.
+    const overturnFor = p.skipped ? null : (h, ci) =>
+      h.match
+        ? `<button class="secondary mini" onclick="actOverturn(${i}, ${ci}, false)">${t(lang, "revokeMatchBtn")}</button>`
+        : p.points ? ""
+        : `<button class="mini" onclick="actOverturn(${i}, ${ci}, true)">${t(lang, "countMatchBtn")}</button>`;
+    const histRows = historyRows(p.history, lang, overturnFor);
+    const histBlock = histRows ? `<div class="stack">${histRows}</div>` : "";
     if (p.done) {
       return `<div class="pr" style="flex-direction:column; align-items:stretch; gap:6px">
         <div style="display:flex; justify-content:space-between">${label}</div>
+        ${histBlock}
         ${continueButton}
       </div>`;
     }
@@ -1666,6 +1817,7 @@ function pairsStatus(v, lang) {
     return `<div class="pr ${p.active ? "pr-active" : ""}" style="flex-direction:column; align-items:stretch; gap:6px">
       <div style="display:flex; justify-content:space-between">${p.active ? `<span class="pr-active-tag">▶ </span>` : ""}${label}</div>
       <div class="small">${detail}${timerPill}</div>
+      ${histBlock}
       ${timerButtons}
       ${continueButton}
       ${matchButtons}
@@ -1701,22 +1853,7 @@ function renderRound(v) {
         </div>
       </div>`;
   } else { // guess or done
-    const hist = v.history.map((h, i) => h.timeout ? `
-      <div class="history-row">
-        <span>${h.mine ? esc(h.mine) : "—"}</span>
-        <span class="mark">⏰</span>
-        <span>${t(lang, "timedOutHist")}</span>
-      </div>` : h.mine == null ? `
-      <div class="history-row">
-        <span>${tf(lang, "chanceHistLabel", { n: i + 1 })}</span>
-        <span class="mark">${h.match ? "🤝" : "≠"}</span>
-        <span>${h.match ? t(lang, "matchedHist") : t(lang, "noMatchHist")}</span>
-      </div>` : `
-      <div class="history-row">
-        <span>${esc(h.mine)}</span>
-        <span class="mark">${h.match ? "🤝" : "≠"}</span>
-        <span>${esc(h.theirs)}</span>
-      </div>`).join("");
+    const hist = historyRows(v.history, lang);
     const timerPill = v.timer
       ? `<span class="timer-pill js-countdown ${v.timer.paused ? "paused" : ""}">${v.timer.paused ? t(lang, "pausedLabel") : `⏱ ${Math.ceil(v.timer.remainingMs / 1000)}s`}</span>` : "";
     if (v.phase === "guess" && v.timedOutWaiting) {
